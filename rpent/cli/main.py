@@ -42,6 +42,7 @@ import shlex
 import sys
 import time
 from collections.abc import Callable
+from dataclasses import replace
 from pathlib import Path
 
 from rpent.cli.tui import (
@@ -53,7 +54,7 @@ from rpent.dashboard.events import (
     RunStartedEvent,
 )
 from rpent.evaluation import RunFinalizationContext
-from rpent.memory import MemoryManager
+from rpent.memory import MemoryBackend
 from rpent.planner.base import (
     REASONING_EFFORTS,
     build_planner,
@@ -203,6 +204,17 @@ def _build_argparser() -> argparse.ArgumentParser:
         "--memory-dir",
         default=None,
         help="Local memory root (environment default when omitted).",
+    )
+    ap.add_argument(
+        "--memory-backend",
+        choices=["filesystem", "agfs"],
+        default="filesystem",
+        help="Memory storage backend (default: filesystem).",
+    )
+    ap.add_argument(
+        "--agfs-endpoint",
+        default=None,
+        help="Attach to an existing AGFS server instead of starting one.",
     )
     ap.add_argument(
         "--memory-repo",
@@ -446,6 +458,8 @@ def main() -> int:
         parser.error("--memory-dir requires --memory-profile local or --explore")
     if args.memory_repo is not None and args.memory_profile == "local":
         parser.error("--memory-repo requires HF evaluation")
+    if args.agfs_endpoint is not None and args.memory_backend != "agfs":
+        parser.error("--agfs-endpoint requires --memory-backend agfs")
     from rpent.memory.loading import prepare_run_memory
 
     try:
@@ -463,7 +477,11 @@ def main() -> int:
         return run_dashboard_session(args, robot_spec, parser=parser)
 
     try:
-        run_config = robot_spec.parse_config(args)
+        run_config = replace(
+            robot_spec.parse_config(args),
+            memory_backend=getattr(args, "memory_backend", "filesystem"),
+            agfs_endpoint=getattr(args, "agfs_endpoint", None),
+        )
     except (OSError, ValueError) as exc:
         parser.error(str(exc))
     recipe_tag = run_config.recipe_tag
@@ -571,7 +589,7 @@ def main() -> int:
     solved = False
     environment_success: bool | None = None
     environment_metrics: dict = {}
-    memory_manager: MemoryManager | None = None
+    memory_manager: MemoryBackend | None = None
     try:
         if first_user_msg is not None:
             dashboard_events.emit(RunStartedEvent())

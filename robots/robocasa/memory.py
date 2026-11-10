@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Any
 
 from rpent.evaluation import write_json_atomic
-from rpent.memory import MemoryManager
+from rpent.memory import FileSystemBackend, get_memory_backend
 from rpent.memory.manager import _split_frontmatter, _validate
 from rpent.memory.model import select_model_version, validate_options
 from rpent.memory.source import prepare_explicit_source
@@ -211,7 +211,7 @@ class TaskMemory:
         wanted = task_files(task_name) if task_name is not None else ()
         if not root.is_dir():
             raise ValueError(f"RoboCasa memory directory not found: {root}")
-        MemoryManager(root).check_layout()
+        get_memory_backend(root=root).check_layout()
         pairs = [wanted] if wanted else []
         if wanted and profile == "local":
             pairs.append(local_task_files(task_name, split))
@@ -300,18 +300,35 @@ def memory_from_variables(variables: Mapping[str, object]) -> TaskMemory:
     )
 
 
-class RoboCasaMemoryManager(MemoryManager):
+class RoboCasaMemoryBackend(FileSystemBackend):
     """Restrict RPent file tools to the current task and global layer.
 
     This is a file-tool boundary, not an OS sandbox. Non-memory observations
     remain accessible through the shared tools' normal access rules.
     """
 
-    def __init__(self, memory: TaskMemory, *, output_dir: Path | None = None):
+    def __init__(
+        self,
+        memory: TaskMemory,
+        *,
+        output_dir: Path | None = None,
+        memory_backend: str = "filesystem",
+        agfs_endpoint: str | None = None,
+    ):
         super().__init__(root=memory.root)
         self.selection = memory
         self._read_files: set[str] = set()
         self._output_dir = output_dir
+        self._agfs_backend = (
+            get_memory_backend(
+                memory_backend,
+                root=memory.root,
+                agfs_endpoint=agfs_endpoint,
+                robot="robocasa",
+            )
+            if memory_backend == "agfs"
+            else None
+        )
         if output_dir is not None:
             output_dir.mkdir(parents=True, exist_ok=True)
             # A reused output directory starts a new audit for this run.
@@ -384,3 +401,12 @@ class RoboCasaMemoryManager(MemoryManager):
                 f"memory directory is outside current task/global selection: {path}"
             )
         return (self.root / relative).resolve(), entries
+
+    def close(self) -> None:
+        if self._agfs_backend is not None:
+            close = getattr(self._agfs_backend, "close", None)
+            if callable(close):
+                close()
+
+
+RoboCasaMemoryManager = RoboCasaMemoryBackend

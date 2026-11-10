@@ -36,7 +36,7 @@ from rpent.tools.toolkit import Toolkit
 from rpent.utils.logging import get_logger, get_output_dir
 
 if TYPE_CHECKING:
-    from rpent.memory.manager import MemoryManager
+    from rpent.memory.backend import MemoryBackend
 
 logger = get_logger("libero_toolkit")
 
@@ -49,7 +49,7 @@ class LiberoToolkit(Toolkit):
         *,
         runtime_kwargs: dict[str, Any],
         dashboard_events: DashboardEventSink,
-        memory: MemoryManager,
+        memory: MemoryBackend,
         enable_direct_action: bool = False,
         mode: str = "evaluation",
         attempts_per_session: int = 0,

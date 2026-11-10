@@ -23,6 +23,7 @@ import shlex
 import sys
 import threading
 import time
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -33,7 +34,7 @@ from rpent.cli.main import (
 )
 from rpent.dashboard.events import RunStartedEvent
 from rpent.evaluation import RunFinalizationContext
-from rpent.memory import MemoryManager
+from rpent.memory import get_memory_backend
 from rpent.planner.base import build_planner, is_recoverable_agent_error
 from rpent.robots import get_toolkit
 from rpent.utils.config import get_memory_dir
@@ -149,7 +150,7 @@ def run_dashboard_session(
                 prepare_explicit_source(args.memory_repo, robot_spec.name)
             )
         else:
-            MemoryManager(get_memory_dir(robot_spec.name)).sync(
+            get_memory_backend(root=get_memory_dir(robot_spec.name)).sync(
                 remote_repo=robot_spec.memory_repo_id,
             )
 
@@ -205,7 +206,11 @@ def _run_dashboard_task(
     if task_args.explore and not robot_spec.supports_exploration:
         raise ValueError(f"--explore is not supported for robot {robot_spec.name!r}")
     task_args.output_dir = str(claimed.output_dir)
-    run_config = robot_spec.parse_config(task_args)
+    run_config = replace(
+        robot_spec.parse_config(task_args),
+        memory_backend=getattr(task_args, "memory_backend", "filesystem"),
+        agfs_endpoint=getattr(task_args, "agfs_endpoint", None),
+    )
     from rpent.memory.loading import prepare_run_memory
 
     prepare_run_memory(task_args, robot_spec, run_config)

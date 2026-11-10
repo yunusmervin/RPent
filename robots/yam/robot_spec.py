@@ -26,7 +26,7 @@ from robots.yam.prompt_bundle import system_prompt, user_prompt
 from robots.yam.tasks import TASK_INSTRUCTIONS, resolve_task_language
 from rpent.dashboard.events import DashboardEventSink
 from rpent.dashboard.spec import DashboardSpec
-from rpent.memory import MemoryManager
+from rpent.memory import get_memory_backend
 from rpent.robots.components.am_runtime import add_am_args, select_am
 from rpent.robots.prompt_bundle import PromptBundle
 from rpent.robots.robot_spec import RobotSpec, RunConfig
@@ -105,10 +105,13 @@ def get_toolkit(
     from robots.yam.toolkit import YamToolkit
 
     explore = mode == "exploration"
-    memory = MemoryManager(
+    memory = get_memory_backend(
+        config.memory_backend,
         root=config.prompt_vars.get("memory_dir") or get_memory_dir("yam"),
         memory_access="inbox_write" if explore else "read_only",
         inbox_cell_tag=config.recipe_tag if explore else None,
+        agfs_endpoint=config.agfs_endpoint,
+        robot="yam",
     )
     if config.prompt_vars["task_id"] == 0:
         runtime_kwargs = {

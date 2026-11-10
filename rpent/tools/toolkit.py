@@ -39,7 +39,7 @@ from rpent.utils.templates import substitute
 logger = get_logger("toolkit")
 
 if TYPE_CHECKING:
-    from rpent.memory.manager import MemoryManager
+    from rpent.memory.backend import MemoryBackend
     from rpent.session import EnvState, StepRecord
 
 
@@ -144,7 +144,7 @@ class Toolkit:
         *,
         dashboard_events: DashboardEventSink,
         state: Any = None,
-        memory: "MemoryManager",
+        memory: "MemoryBackend",
     ) -> None:
         self._tools: dict[str, Tool] = {}
         self._dashboard_events = dashboard_events
@@ -195,8 +195,8 @@ class Toolkit:
     # ------------------------------------------------------------------
 
     @property
-    def memory(self) -> "MemoryManager":
-        """Return the run's required memory manager."""
+    def memory(self) -> "MemoryBackend":
+        """Return the run's required memory backend."""
         return self._memory
 
     @property
@@ -352,6 +352,9 @@ class Toolkit:
         """Close admission and drain calls before subclasses release resources."""
         self._scheduler.cancel(close=True)
         self.cancel_active_and_wait()
+        close_memory = getattr(self.memory, "close", None)
+        if callable(close_memory):
+            close_memory()
 
     def exploration_continuation(self, *, explicit: bool = False) -> str | None:
         """Return a rule-checked continuation at an idle planner boundary."""

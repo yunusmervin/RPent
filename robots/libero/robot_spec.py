@@ -27,7 +27,7 @@ from robots.libero.prompt_bundle import system_prompt, user_prompt
 from robots.libero.suites import LIBERO_SUITE_NAMES, resolve_libero_type
 from rpent.dashboard.events import DashboardEventSink
 from rpent.dashboard.spec import DashboardSpec
-from rpent.memory import MemoryManager
+from rpent.memory import get_memory_backend
 from rpent.robots.components.am_runtime import (
     WAM_BACKENDS,
     AMConfig,
@@ -151,10 +151,13 @@ def get_toolkit(
     from robots.libero.toolkit import LiberoToolkit
 
     explore = mode == "exploration"
-    memory = MemoryManager(
+    memory = get_memory_backend(
+        config.memory_backend,
         root=config.prompt_vars.get("memory_dir") or get_memory_dir("libero"),
         memory_access="inbox_write" if explore else "read_only",
         inbox_cell_tag=config.recipe_tag if explore else None,
+        agfs_endpoint=config.agfs_endpoint,
+        robot="libero",
     )
     return LiberoToolkit(
         runtime_kwargs=runtime_kwargs,

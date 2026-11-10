@@ -32,7 +32,7 @@ OBSERVATION_TOOLS = frozenset(
 MOTION_TOOLS = frozenset({"move_to", "rotate_wrist", "set_gripper", "release"})
 
 if TYPE_CHECKING:
-    from rpent.memory.manager import MemoryManager
+    from rpent.memory.backend import MemoryBackend
 
 
 class RoboDojoToolkit(Toolkit):
@@ -48,7 +48,7 @@ class RoboDojoToolkit(Toolkit):
         *,
         primitives_kwargs: dict[str, Any],
         dashboard_events: DashboardEventSink,
-        memory: MemoryManager,
+        memory: MemoryBackend,
         eval_fair: bool = False,
         state_output_dir: Path | str | None = None,
     ) -> None:

@@ -20,6 +20,7 @@ import fcntl
 import os
 import re
 import shutil
+import warnings
 from pathlib import Path
 from typing import Any
 
@@ -126,7 +127,7 @@ def _has_local_memory(root: Path) -> bool:
     return root.is_dir() and any(path.is_file() for path in root.rglob("*"))
 
 
-class MemoryManager:
+class FileSystemBackend:
     """Manage merge, validation, and synchronization for one memory corpus.
 
     root is the corpus root. It is stored resolved and created lazily by
@@ -450,4 +451,15 @@ class MemoryManager:
         return self._root
 
 
-__all__ = ["MemoryManager"]
+def __getattr__(name: str) -> Any:
+    if name == "MemoryManager":
+        warnings.warn(
+            "MemoryManager is deprecated; use FileSystemBackend instead",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return FileSystemBackend
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+__all__ = ["FileSystemBackend"]

@@ -50,6 +50,8 @@ class RunConfig:
     prompt_vars: dict[str, Any]
     task_desc: dict[str, Any]
     enable_direct_action: bool = False
+    memory_backend: str = "filesystem"
+    agfs_endpoint: str | None = None
 
 
 @dataclass(frozen=True)

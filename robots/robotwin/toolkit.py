@@ -33,7 +33,7 @@ from rpent.tools.toolkit import Toolkit
 from rpent.utils.logging import get_output_dir
 
 if TYPE_CHECKING:
-    from rpent.memory.manager import MemoryManager
+    from rpent.memory.backend import MemoryBackend
 
 # State-advancing RoboTwin primitives eligible for the recipe. ``reset``,
 # ``render``, and read-only tools are intentionally excluded so the recipe
@@ -96,7 +96,7 @@ class RoboTwinToolkit(Toolkit):
         *,
         runtime_kwargs: dict[str, Any],
         dashboard_events: DashboardEventSink,
-        memory: MemoryManager,
+        memory: MemoryBackend,
         enable_direct_action: bool = False,
         mode: str = "evaluation",
         attempts_per_session: int = 0,

@@ -20,7 +20,7 @@ import argparse
 import json
 from pathlib import Path
 
-from rpent.memory import MemoryManager
+from rpent.memory import MemoryManager, get_memory_backend
 from rpent.utils.config import get_memory_dir
 
 
@@ -49,7 +49,10 @@ def _parser() -> argparse.ArgumentParser:
 
 def main() -> int:
     args = _parser().parse_args()
-    manager = MemoryManager(args.memory_dir)
+    manager = get_memory_backend(
+        root=args.memory_dir,
+        _backend_class=MemoryManager,
+    )
     if args.command == "merge":
         result = manager.merge_memory(
             cell_tag=args.cell,
