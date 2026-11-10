@@ -1,0 +1,15 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "RPent: Local simulation demo",
+			"type": "shell",
+			"command": "${workspaceFolder}/.venv/bin/python",
+			"args": [
+				"${workspaceFolder}/logs/local_sim_demo.py"
+			],
+			"isBackground": false,
+			"problemMatcher": []
+		}
+	]
+}
