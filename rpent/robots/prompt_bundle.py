@@ -43,5 +43,19 @@ class PromptBundle:
         variables: Mapping[str, object] | None = None,
     ) -> str:
         """Render one prompt variant (``"system"`` or ``"user"``)."""
+        variables = variables or {}
         prompt = getattr(self, variant)(variables)
-        return format_prompt(prompt, variables=variables)
+        rendered = format_prompt(prompt, variables=variables)
+        preferences = str(variables.get("operator_preferences") or "").strip()
+        if variant == "system" and preferences:
+            rendered = (
+                rendered.rstrip()
+                + "\n\n\n"
+                + "═" * 71
+                + "\nOPERATOR PREFERENCES\n"
+                + "═" * 71
+                + "\n\n"
+                + preferences
+                + "\n"
+            )
+        return rendered

@@ -63,6 +63,9 @@ from rpent.planner.base import (
 )
 from rpent.planner.check import BASE_URL_ENV_BY_PLANNER
 from rpent.robots import enumerate_robots, get_robot_spec, get_toolkit
+from rpent.session_memory.hook import SessionMemoryHook
+from rpent.session_memory.recall import recall_preferences, register_preference_recall
+from rpent.session_memory.service import create_session_memory_client
 from rpent.utils.logging import get_logger, init_output_dir
 
 logger = get_logger("agent")
@@ -195,6 +198,17 @@ def _build_argparser() -> argparse.ArgumentParser:
 
     # other config
     ap.add_argument("--output-dir", default=None)
+    ap.add_argument(
+        "--operator-id",
+        default="default_operator",
+        help="Operator scope for session history and preference recall.",
+    )
+    ap.add_argument(
+        "--session-memory-endpoint",
+        default=None,
+        help="HTTP endpoint of the independent mem0 session memory service. "
+        "Defaults to SESSION_MEMORY_ENDPOINT; unset disables this optional plane.",
+    )
     ap.add_argument(
         "--memory-profile",
         choices=["hf", "local"],
@@ -345,6 +359,7 @@ def _start_continuation_session(
     prompt_vars,
     session_number: int,
     session_max: int,
+    session_memory_hook: SessionMemoryHook | None = None,
 ):
     """Build a fresh planner and prompts for an exploration handoff."""
     logger.info("=== handing off to agent %d/%d ===", session_number, session_max)
@@ -362,6 +377,11 @@ def _start_continuation_session(
         dashboard_events=dashboard_events,
         no_images=args.no_images,
         interactive=args.tui,
+        user_input_hook=(
+            session_memory_hook.record_user_message
+            if session_memory_hook is not None and args.tui and args.planner == "api"
+            else None
+        ),
     )
     system_prompt = prompt_bundle.render(
         "system",
@@ -523,6 +543,11 @@ def main() -> int:
 
     prepare_run_memory(args, robot_spec, run_config)
 
+    session_memory_client = create_session_memory_client(args.session_memory_endpoint)
+    session_memory_hook = SessionMemoryHook.from_args(
+        args, session_memory_client, run_id=recipe_tag
+    )
+
     dashboard_events = NullDashboardEventSink()
 
     planner = build_planner(
@@ -540,9 +565,22 @@ def main() -> int:
         dashboard_events=dashboard_events,
         no_images=args.no_images,
         interactive=args.tui,
+        user_input_hook=(
+            session_memory_hook.record_user_message if native_cli else None
+        ),
     )
     prompt_bundle = robot_spec.prompts
-    prompt_vars = {**prompt_vars, "output_dir": output_dir}
+    operator_preferences = recall_preferences(
+        session_memory_client,
+        str(task_desc.get("task_language") or task_desc.get("task_name") or recipe_tag),
+        user_id=args.operator_id,
+        run_id=recipe_tag,
+    )
+    prompt_vars = {
+        **prompt_vars,
+        "output_dir": output_dir,
+        "operator_preferences": operator_preferences,
+    }
     system_prompt = prompt_bundle.render(
         "system",
         variables=prompt_vars,
@@ -567,6 +605,7 @@ def main() -> int:
         start_interactive_reader(
             input_queue,
             first_prompt_default=user_msg,
+            on_user_line=session_memory_hook.record_user_message,
             **(
                 {
                     "line_handler": operator_input.route_line,
@@ -607,6 +646,8 @@ def main() -> int:
             logger.info("no task entered; ending session before start.")
     if human_interactive_exploration:
         prompt_vars = {**prompt_vars, "initial_user_message": first_user_msg}
+    if not args.tui and first_user_msg is not None:
+        session_memory_hook.record_task(first_user_msg)
     # Exploration may hand off between independent planner contexts.
     sessions = max(1, int(getattr(args, "explore_sessions", 1) or 1))
     if not getattr(args, "explore", False):
@@ -635,6 +676,7 @@ def main() -> int:
                     prompt_vars=prompt_vars,
                     session_number=session_number,
                     session_max=sessions,
+                    session_memory_hook=session_memory_hook,
                 )
             state_output_dir = output_dir
             if getattr(args, "explore", False):
@@ -667,11 +709,18 @@ def main() -> int:
                     config=run_config,
                 )
             memory_manager = toolkit.memory
+            register_preference_recall(
+                toolkit,
+                session_memory_client,
+                user_id=args.operator_id,
+                run_id=recipe_tag,
+            )
             if operator_input is not None and input_queue is not None:
 
                 def accept_verdict(verdict: str, active_toolkit=toolkit) -> bool:
                     if not active_toolkit.request_direct_verdict(verdict):
                         return False
+                    session_memory_hook.record_verdict(verdict)
                     logger.info(
                         "/%s accepted: stopping actions, then recording the result and exiting.",
                         verdict,

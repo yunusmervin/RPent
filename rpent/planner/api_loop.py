@@ -22,7 +22,7 @@ RPent's runner saves the returned transcript through its existing output flow.
 import asyncio
 import json
 import threading
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator, Callable, Sequence
 from contextlib import asynccontextmanager
 from functools import partial
 from typing import Any
@@ -105,6 +105,7 @@ class ApiAgentLoop(Planner):
         no_images: bool = False,
         timeout_s: float = 1200,
         interactive: bool = False,
+        user_input_hook: Callable[[str], None] | None = None,
     ) -> None:
         if reasoning_effort not in REASONING_EFFORTS:
             raise ValueError(f"unsupported reasoning effort: {reasoning_effort}")
@@ -117,6 +118,7 @@ class ApiAgentLoop(Planner):
         self.no_images = no_images
         self.timeout_s = timeout_s
         self.interactive = interactive
+        self.user_input_hook = user_input_hook
 
     def solve(
         self,
@@ -158,7 +160,11 @@ class ApiAgentLoop(Planner):
             toolkit, dashboard_events=self.dashboard_events, no_images=self.no_images
         )
         session = _Session(
-            adapter, conversation_id, max_turns, interactive=self.interactive
+            adapter,
+            conversation_id,
+            max_turns,
+            interactive=self.interactive,
+            user_input_hook=self.user_input_hook,
         )
         agent = Agent(
             self.model,
@@ -475,12 +481,14 @@ class _Session(AbstractCapability):
         max_turns: int,
         *,
         interactive: bool = False,
+        user_input_hook: Callable[[str], None] | None = None,
     ) -> None:
         self.toolkit = toolkit
         self.conversation_id = conversation_id
         self.limits = UsageLimits(request_limit=max_turns)
         self.usage = RunUsage()
         self.interactive = interactive
+        self.user_input_hook = user_input_hook
         self.error: str | None = None
         self.control: DashboardPlannerControl | None = None
         self.inbox: asyncio.Queue[DashboardMessage] = asyncio.Queue()
@@ -599,6 +607,8 @@ class _Session(AbstractCapability):
             logger.info("[%s] %s", kind, part.content)
 
     def emit_user(self, text: str) -> None:
+        if self.user_input_hook is not None:
+            self.user_input_hook(text)
         self.toolkit.messages.append({"role": "user", "content": text})
         self.toolkit.dashboard_events.emit(
             TranscriptEvent({"type": "user", "text": text})

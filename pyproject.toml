@@ -58,6 +58,7 @@ dependencies = [
 rpent = "rpent.cli.main:main"
 rpent-memory = "rpent.cli.memory:main"
 rpent-check-llm = "rpent.cli.check_llm:main"
+rpent-session-memory = "rpent.session_memory.service:main"
 rpent-flywheel = "rpent.flywheel.cli:main"
 
 [project.urls]
@@ -88,6 +89,9 @@ sam3 = [
 embedding = [
     "sentence-transformers>=5.2",
     "pillow>=10",
+]
+session-memory = [
+    "mem0ai>=0.1.100,<2",
 ]
 molmo = [
     # Molmo's remote code uses transformers' video-processing API, which the
