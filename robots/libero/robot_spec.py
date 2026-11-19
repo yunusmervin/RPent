@@ -69,6 +69,7 @@ FLASH_SUITES = frozenset(
 def _embedding_requested(args: argparse.Namespace) -> bool:
     return bool(
         getattr(args, "record_episodes", False)
+        or getattr(args, "explore", False)
         or getattr(args, "episode_search_enabled", False)
         or getattr(args, "enable_episode_search", False)
     )
