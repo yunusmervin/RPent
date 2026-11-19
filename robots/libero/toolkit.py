@@ -58,6 +58,8 @@ class LiberoToolkit(Toolkit):
     ) -> None:
         if mode not in {"evaluation", "exploration"}:
             raise ValueError(f"unsupported LIBERO toolkit mode: {mode!r}")
+        runtime_kwargs = dict(runtime_kwargs)
+        self._embedding_client = runtime_kwargs.pop("embedding_client", None)
         self._state_output_dir = Path(state_output_dir or get_output_dir())
         state = EnvState(self._state_output_dir)
         super().__init__(
