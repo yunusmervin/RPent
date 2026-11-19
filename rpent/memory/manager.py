@@ -26,6 +26,7 @@ from typing import Any
 
 import yaml
 
+from rpent.memory.freeze_state import assert_corpus_writable
 from rpent.utils.config import get_repo_root
 from rpent.utils.logging import get_logger
 
@@ -192,6 +193,8 @@ class FileSystemBackend:
             return resolved
 
         parts = resolved.relative_to(self._root).parts
+        if write:
+            assert_corpus_writable(self._root)
         if self._memory_access == "inbox_write" and parts[:3] == (
             "_internal",
             "inbox",
@@ -223,6 +226,7 @@ class FileSystemBackend:
         archived under _internal/conflicts. Solved audit/recipe pairs are
         copied to task-specific/. MEMORY.md is refreshed at the end.
         """
+        assert_corpus_writable(self._root)
         self.check_layout()
         root = self._root
         run_dir = Path(run_state_dir).resolve()
@@ -322,6 +326,7 @@ class FileSystemBackend:
         index is rebuilt from the rest. Returns None and writes nothing when
         there are no leaves with parseable frontmatter.
         """
+        assert_corpus_writable(self._root)
         self.check_layout()
         root = self._root
         groups: dict[str, list[tuple[str, dict[str, Any]]]] = {
@@ -405,6 +410,7 @@ class FileSystemBackend:
         allow_patterns: tuple[str, ...] | None = None,
     ) -> Path:
         """Sync this memory corpus from its Hugging Face dataset."""
+        assert_corpus_writable(self._root, recursive=True)
         robot_name = self._root.name
         repo_id = os.environ.get(
             "RPENT_MEMORY_HF_REPO",

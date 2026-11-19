@@ -86,10 +86,18 @@ class MilvusEpisodeSink:
     def close(self) -> None:
         self._client.close()
 
+    def _assert_collection_writable(self, collection_name: str) -> None:
+        # Never cache this flag: a separate process may freeze a live sink.
+        description = self._client.describe_collection(collection_name=collection_name)
+        properties = description.get("properties") or {}
+        if str(properties.get("frozen", "false")).lower() == "true":
+            raise RuntimeError(f"Milvus collection {collection_name!r} is frozen")
+
     def _ensure_collection(self, memory_version: str, embedding_model: str) -> str:
         collection_name = episode_collection_name(memory_version)
         known_model = self._known_collections.get(collection_name)
         if known_model is not None:
+            self._assert_collection_writable(collection_name)
             if known_model != embedding_model:
                 raise ValueError(
                     f"collection {collection_name!r} uses embedding model "
@@ -101,6 +109,8 @@ class MilvusEpisodeSink:
                 collection_name=collection_name
             )
             properties = description.get("properties") or {}
+            if str(properties.get("frozen", "false")).lower() == "true":
+                raise RuntimeError(f"Milvus collection {collection_name!r} is frozen")
             if properties.get("embedding_model") != embedding_model:
                 raise ValueError(
                     f"collection {collection_name!r} does not use embedding model "
@@ -184,15 +194,11 @@ class MilvusEpisodeSink:
             or response.get("dim") != VECTOR_DIM
             or len(vector) != VECTOR_DIM
         ):
-            raise ValueError(
-                f"episode embedding must have dimension {VECTOR_DIM}"
-            )
+            raise ValueError(f"episode embedding must have dimension {VECTOR_DIM}")
         return [float(value) for value in vector]
 
     @staticmethod
-    def _row(
-        episode: Episode, episode_uri: str, vector: list[float]
-    ) -> dict[str, Any]:
+    def _row(episode: Episode, episode_uri: str, vector: list[float]) -> dict[str, Any]:
         return {
             "episode_id": episode.episode_id,
             "vector": vector,
@@ -230,14 +236,16 @@ class MilvusEpisodeSink:
             episodes[0][0].memory_version,
             episodes[0][0].embedding_model,
         )
-        rows = [
-            self._row(episode, episode_uri, self._encode(episode))
-            for episode, episode_uri in episodes
-        ]
-        for start in range(0, len(rows), batch_size):
+        for start in range(0, len(episodes), batch_size):
+            self._assert_collection_writable(collection_name)
+            rows = [
+                self._row(episode, episode_uri, self._encode(episode))
+                for episode, episode_uri in episodes[start : start + batch_size]
+            ]
+            self._assert_collection_writable(collection_name)
             self._client.upsert(
                 collection_name=collection_name,
-                data=rows[start : start + batch_size],
+                data=rows,
             )
 
     def rebuild(
@@ -249,19 +257,23 @@ class MilvusEpisodeSink:
         version_dir = Path(episodes_dir) / memory_version
         paths = sorted(version_dir.glob("*.json"))
         if not version_dir.is_dir():
-            raise FileNotFoundError(f"episode version directory not found: {version_dir}")
+            raise FileNotFoundError(
+                f"episode version directory not found: {version_dir}"
+            )
         episodes: list[tuple[Episode, str]] = []
         for path in paths:
             episode = Episode.model_validate_json(path.read_bytes())
-            if episode.memory_version != memory_version or episode.episode_id != path.stem:
+            if (
+                episode.memory_version != memory_version
+                or episode.episode_id != path.stem
+            ):
                 raise ValueError(f"episode metadata does not match its path: {path}")
-            episode_uri = (
-                f"agfs://episodes/{memory_version}/{episode.episode_id}.json"
-            )
+            episode_uri = f"agfs://episodes/{memory_version}/{episode.episode_id}.json"
             episodes.append((episode, episode_uri))
 
         collection_name = episode_collection_name(memory_version)
         if self._client.has_collection(collection_name=collection_name):
+            self._assert_collection_writable(collection_name)
             self._client.drop_collection(collection_name=collection_name)
         self._known_collections.pop(collection_name, None)
         if episodes:

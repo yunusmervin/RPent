@@ -28,6 +28,11 @@ from typing import Any
 
 import yaml
 
+from rpent.memory.freeze_state import (
+    assert_corpus_writable,
+    assert_episode_writable,
+    read_freeze_config,
+)
 from rpent.memory.manager import FileSystemBackend
 from rpent.utils.daemon import ProcessDaemon, pick_free_port
 from rpent.utils.logging import get_logger
@@ -105,9 +110,7 @@ class AGFSBackend(FileSystemBackend):
             raise ValueError(f"invalid AGFS robot name: {self._robot!r}")
         storage_root = self.root / "_internal" / "agfs"
         self._frames_dir = self._storage_path(frames_dir, storage_root / "frames")
-        self._episodes_dir = self._storage_path(
-            episodes_dir, storage_root / "episodes"
-        )
+        self._episodes_dir = self._storage_path(episodes_dir, storage_root / "episodes")
         self._transcripts_dir = self._storage_path(
             transcripts_dir, storage_root / "transcripts"
         )
@@ -127,7 +130,9 @@ class AGFSBackend(FileSystemBackend):
             )
 
     def _storage_path(self, configured: str | Path | None, default: Path) -> Path:
-        path = Path(configured).resolve() if configured is not None else default.resolve()
+        path = (
+            Path(configured).resolve() if configured is not None else default.resolve()
+        )
         if not path.is_relative_to(self.root):
             raise ValueError(f"AGFS storage escapes robot memory root: {path}")
         return path
@@ -163,6 +168,18 @@ class AGFSBackend(FileSystemBackend):
         ]
         if self._memory_access == "inbox_write" or self._episode_recording:
             mounts.append(("episodes", "/episodes", self.episodes_dir))
+        # LocalFS has no readonly option; persistent backend guards and the
+        # freeze command's filesystem permissions enforce these mounts.
+        for index, (version, entry) in enumerate(
+            read_freeze_config(self.root)["versions"].items()
+        ):
+            mounts.append(
+                (
+                    f"episodes-frozen-{index}",
+                    f"/episodes/{version}",
+                    Path(entry["episodes_dir"]),
+                )
+            )
         return [
             {
                 "name": name,
@@ -242,6 +259,7 @@ class AGFSBackend(FileSystemBackend):
         """Store PNG bytes by SHA256 and return their stable AGFS URI."""
         if self._memory_access != "inbox_write" and not self._episode_recording:
             raise PermissionError("writing frames is denied in this mode")
+        assert_corpus_writable(self.root)
         if not isinstance(png_bytes, bytes):
             raise TypeError("png_bytes must be bytes")
         digest = hashlib.sha256(png_bytes).hexdigest()
@@ -286,7 +304,11 @@ class AGFSBackend(FileSystemBackend):
                 raise ValueError(f"invalid episode path component: {component!r}")
         if not isinstance(payload, bytes):
             raise TypeError("payload must be bytes")
+        assert_corpus_writable(self.root)
+        assert_episode_writable(self.root, memory_version)
         destination = self.episodes_dir / memory_version / f"{episode_id}.json"
+        if not destination.resolve().is_relative_to(self.root):
+            raise PermissionError("episode destination escapes robot memory root")
         uri = f"agfs://episodes/{memory_version}/{episode_id}.json"
         if destination.exists():
             return uri
