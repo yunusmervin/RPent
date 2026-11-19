@@ -233,6 +233,7 @@ def build_planner(
     dashboard_events: DashboardEventSink,
     no_images: bool = False,
     interactive: bool = False,
+    user_input_hook: Callable[[str], None] | None = None,
 ) -> Planner:
     """Build a planner for the given backend, resolving credentials from env vars."""
     # Imports are deferred to avoid a circular import: api_loop / claude_code /
@@ -253,6 +254,7 @@ def build_planner(
             no_images=no_images,
             timeout_s=api_timeout_s,
             interactive=interactive,
+            user_input_hook=user_input_hook,
         )
     if planner_type == "claude_code":
         from rpent.planner.claude_code import ClaudeCodePlanner

@@ -153,6 +153,7 @@ def start_interactive_reader(
     *,
     first_prompt_default: str | None = None,
     line_handler: Callable[[str], bool] | None = None,
+    on_user_line: Callable[[str], None] | None = None,
     on_close: Callable[[], None] | None = None,
     extra_help: str = "",
 ) -> threading.Thread:
@@ -189,6 +190,8 @@ def start_interactive_reader(
                             continue
                         if line_handler is not None and line_handler(line):
                             continue
+                        if on_user_line is not None:
+                            on_user_line(line)
                         input_queue.put(line)
                         pending_default = None
                         if line.strip().lower() in QUIT_TOKENS:
