@@ -393,27 +393,32 @@ WORKFLOW_STEPS = (
   `wrist_high.png` if useful, and call `view_camera_meta` if needed. Identify ALL target
 objects, destination surfaces, and relation landmarks named by task_language.
 """,
-    """READ MEMORY for the observed `task_language` and scene. The library contains
-operating wisdom, magic numbers, gotchas, and reusable manipulation patterns,
-indexed by:
-  `{{memory_dir}}/MEMORY.md`
-Scan the index, then `read_text_file` the few leaf memories most relevant to
-your cell. They are not all named `feedback_*`, and the index lines do not spell
-out every scene a memory covers — so SEARCH the library yourself rather than
-reading the index alone: `list_dir` `{{memory_dir}}/global/` and
-`{{memory_dir}}/task-family/` to see every memory file, and pick candidates by the
-objects, container, fixture or motion your scene involves (wording taken from
-your task description works as a search key too). If a shell / grep tool is
-available to you, `grep -rl "<keyword>" {{memory_dir}}/global/
-{{memory_dir}}/task-family/` jumps straight to the files that mention your objects
-— use it when you can; otherwise fall back to `list_dir` + `read_text_file`.
-A given theme often has several near-identical skill files (e.g. multiple
-stove / basket / mug patterns that differ only in WHICH objects or step
-order). When it does, do NOT pick from the one-line index or stop at the first
-name — `read_text_file` the top candidates and choose the one whose objects,
-spatial relation and step order actually match YOUR scene, deciding from the
-file body (not its index blurb). Entries are written as reusable patterns: take
-the technique and the parameter ranges as general know-how, and re-derive every
+    """READ MEMORY for the observed `task_language` and scene in three stages.
+The library contains operating wisdom, magic numbers, gotchas, and reusable
+manipulation patterns.
+
+1. READ THE INDEX AND NAVIGATE: read `{{memory_dir}}/MEMORY.md`. Scan the index,
+then `list_dir` `{{memory_dir}}/global/` and `{{memory_dir}}/task-family/` to see
+every memory file. Memories are not all named `feedback_*`, and index lines do not
+spell out every scene a memory covers, so pick candidates by the objects,
+container, fixture or motion your scene involves rather than reading the index
+alone.
+2. RECALL SIMILAR EPISODES: when `search_episodes` is exposed, call it with
+`query_text` set to the observed `task_language` and `current_frame` set to the
+initial state's `current_frame_uri`. Use its episode summaries, frame URIs,
+`episode_uri`, and `memory_ids` to find relevant knowledge leaves. Vector
+retrieval is an enhancement, not a prerequisite: if the tool is absent or returns
+`episode_search_unavailable`, use a shell / grep tool when available to run
+`grep -rl "<keyword>" {{memory_dir}}/global/ {{memory_dir}}/task-family/`;
+otherwise use `list_dir` + `read_text_file` as the fallback navigation path.
+3. READ BODIES AND ADJUDICATE: use `read_text_file` on the top candidates and on
+the knowledge leaves linked by recalled `memory_ids` before deciding. A given
+theme often has several near-identical skill files (e.g. multiple stove / basket /
+mug patterns that differ only in WHICH objects or step order). Do NOT pick from
+the one-line index or stop at the first name — choose the one whose objects,
+spatial relation and step order actually match YOUR scene, deciding from the file
+body (not its index blurb or an episode summary). Entries are reusable patterns:
+take the technique and parameter ranges as general know-how, and re-derive every
 coordinate by perception in YOUR scene.
 ⭐ MANDATORY — do this even when a seed-0 recipe exists: the recipe gives the
 commands, this memory gives the reasoning and failure-modes needed to adapt them,
