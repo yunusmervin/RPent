@@ -55,6 +55,7 @@ class RunConfig:
     record_episodes: bool = False
     episode_search_enabled: bool = False
     milvus_uri: str | None = None
+    knowledge_search_enabled: bool = False
 
 
 @dataclass(frozen=True)

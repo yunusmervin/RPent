@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from rpent.episode.writer import EpisodeStore, EpisodeWriter
+from rpent.memory.freeze_state import assert_episode_writable
 
 if TYPE_CHECKING:
     from rpent.episode.milvus_sink import EpisodeEncoder
@@ -75,6 +76,9 @@ def record_episode(
     milvus_uri: str | None = None,
 ) -> str | None:
     try:
+        root = getattr(store, "root", None)
+        if root is not None and memory_version is not None:
+            assert_episode_writable(root, memory_version)
         if allow_read_only_write:
             enable = getattr(store, "enable_episode_recording", None)
             if callable(enable):

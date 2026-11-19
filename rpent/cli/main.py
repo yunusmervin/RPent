@@ -254,6 +254,11 @@ def _build_argparser() -> argparse.ArgumentParser:
         help="Expose readonly semantic episode search when the selected index exists.",
     )
     ap.add_argument(
+        "--enable-knowledge-search",
+        action="store_true",
+        help="Expose readonly semantic knowledge search when the selected leaf index exists.",
+    )
+    ap.add_argument(
         "--memory-repo",
         default=None,
         help="HF dataset owner/repo or https://huggingface.co/datasets/owner/repo@revision.",
@@ -526,6 +531,7 @@ def main() -> int:
             agfs_endpoint=getattr(args, "agfs_endpoint", None),
             record_episodes=getattr(args, "record_episodes", False),
             episode_search_enabled=getattr(args, "enable_episode_search", False),
+            knowledge_search_enabled=getattr(args, "enable_knowledge_search", False),
             milvus_uri=getattr(args, "milvus_uri", None),
         )
     except (OSError, ValueError) as exc:
@@ -658,6 +664,7 @@ def main() -> int:
     environment_metrics: dict = {}
     memory_manager: MemoryBackend | None = None
     episode_state_dir = Path(output_dir)
+    deferred_daemons = []
     try:
         if first_user_msg is not None:
             dashboard_events.emit(RunStartedEvent())
@@ -803,110 +810,128 @@ def main() -> int:
             logger.info("recipe: %s", recipe_path)
         else:
             logger.info("recipe: not written (cell unsolved)")
-        for d in daemons:
-            d.stop()
-
-    elapsed = time.time() - t0
-
-    transcript_path = Path(output_dir) / f"transcript_{recipe_tag}.json"
-    record = {
-        **task_desc,
-        "model": args.model,
-        "elapsed_s": round(elapsed, 1),
-        "finish": finish_result,
-        "error": agent_error,
-        "environment_success": environment_success,
-        "stats": stats,
-        "messages": _serialize_messages(messages),
-    }
-    with open(transcript_path, "a") as f:
-        json.dump(record, f, indent=2, default=str)
-
-    logger.info("elapsed: %.1fs", elapsed)
-    logger.info(
-        "usage: in=%s out=%s tool_calls=%s",
-        stats.get("total_input_tokens", "?"),
-        stats.get("total_output_tokens", "?"),
-        stats.get("tool_calls", "?"),
-    )
-    logger.info("transcript: %s", transcript_path)
-
-    if robot_spec.finalize_run is not None:
         try:
-            result_path = robot_spec.finalize_run(
-                RunFinalizationContext(
-                    output_dir=Path(output_dir),
-                    robot_name=robot_name,
-                    task_desc=dict(task_desc),
-                    environment_success=environment_success,
-                    environment_metrics=environment_metrics,
-                    agent_error=agent_error,
-                    elapsed_s=elapsed,
-                    planner=args.planner,
-                    model=args.model,
-                    reasoning_effort=args.reasoning_effort,
-                    max_turns=args.max_turns,
-                    planner_timeout_s=args.planner_timeout_s,
-                    finish_result=(
-                        dict(finish_result) if finish_result is not None else None
-                    ),
-                    stats=dict(stats),
-                )
-            )
-            if result_path:
-                logger.info("run result: %s", result_path)
-        except Exception as exc:
-            agent_error = f"result finalization failed: {type(exc).__name__}: {exc}"
-            logger.error("%s", agent_error)
+            for d in daemons:
+                # Publication still needs embedding. An unhandled BaseException
+                # skips finalization, so stop immediately on that path.
+                if (
+                    sys.exc_info()[0] is None
+                    and getattr(d, "name", None) == "embedding_server"
+                    and runtime_kwargs.get("embedding_client") is not None
+                ):
+                    deferred_daemons.append(d)
+                else:
+                    d.stop()
+        except BaseException:
+            for daemon in deferred_daemons:
+                daemon.stop()
+            raise
 
-    # Publish exploration artifacts into the corpus after the session loop.
-    merge_required = (
-        getattr(args, "explore", False)
-        and getattr(args, "auto_merge_memory", False)
-        and not agent_error
-        and not (finish_result or {}).get("operator_aborted")
-        and memory_manager is not None
-    )
-    merge_succeeded = False
-    if merge_required:
-        try:
-            merge_result = memory_manager.merge_memory(
-                cell_tag=run_config.recipe_tag,
-                run_state_dir=run_config.output_dir,
-                solved=solved,
-            )
-            merge_succeeded = True
-            if merge_result:
-                logger.info("memory merged: %s", merge_result)
-        except Exception as exc:
-            agent_error = f"memory finalization failed: {type(exc).__name__}: {exc}"
-            logger.error("%s", agent_error)
+    try:
+        elapsed = time.time() - t0
 
-    episodes_enabled = getattr(args, "explore", False) or getattr(
-        args, "record_episodes", False
-    )
-    if (
-        episodes_enabled
-        and memory_manager is not None
-        and (merge_succeeded or not merge_required)
-    ):
-        record_episode(
-            memory_manager,
-            run_state_dir=episode_state_dir,
-            cell_tag=run_config.recipe_tag,
-            robot=robot_name,
-            task_desc=task_desc,
-            finish_result=finish_result,
-            stats=stats,
-            elapsed_s=elapsed,
-            memory_version=prompt_vars.get("memory_version"),
-            environment_success=environment_success,
-            allow_read_only_write=getattr(args, "record_episodes", False),
-            embedding_client=runtime_kwargs.get("embedding_client"),
-            milvus_uri=getattr(args, "milvus_uri", None),
+        transcript_path = Path(output_dir) / f"transcript_{recipe_tag}.json"
+        record = {
+            **task_desc,
+            "model": args.model,
+            "elapsed_s": round(elapsed, 1),
+            "finish": finish_result,
+            "error": agent_error,
+            "environment_success": environment_success,
+            "stats": stats,
+            "messages": _serialize_messages(messages),
+        }
+        with open(transcript_path, "a") as f:
+            json.dump(record, f, indent=2, default=str)
+
+        logger.info("elapsed: %.1fs", elapsed)
+        logger.info(
+            "usage: in=%s out=%s tool_calls=%s",
+            stats.get("total_input_tokens", "?"),
+            stats.get("total_output_tokens", "?"),
+            stats.get("tool_calls", "?"),
         )
+        logger.info("transcript: %s", transcript_path)
 
-    return 1 if agent_error else 0
+        if robot_spec.finalize_run is not None:
+            try:
+                result_path = robot_spec.finalize_run(
+                    RunFinalizationContext(
+                        output_dir=Path(output_dir),
+                        robot_name=robot_name,
+                        task_desc=dict(task_desc),
+                        environment_success=environment_success,
+                        environment_metrics=environment_metrics,
+                        agent_error=agent_error,
+                        elapsed_s=elapsed,
+                        planner=args.planner,
+                        model=args.model,
+                        reasoning_effort=args.reasoning_effort,
+                        max_turns=args.max_turns,
+                        planner_timeout_s=args.planner_timeout_s,
+                        finish_result=(
+                            dict(finish_result) if finish_result is not None else None
+                        ),
+                        stats=dict(stats),
+                    )
+                )
+                if result_path:
+                    logger.info("run result: %s", result_path)
+            except Exception as exc:
+                agent_error = f"result finalization failed: {type(exc).__name__}: {exc}"
+                logger.error("%s", agent_error)
+
+        # Publish exploration artifacts into the corpus after the session loop.
+        merge_required = (
+            getattr(args, "explore", False)
+            and getattr(args, "auto_merge_memory", False)
+            and not agent_error
+            and not (finish_result or {}).get("operator_aborted")
+            and memory_manager is not None
+        )
+        merge_succeeded = False
+        if merge_required:
+            try:
+                merge_result = memory_manager.merge_memory(
+                    cell_tag=run_config.recipe_tag,
+                    run_state_dir=run_config.output_dir,
+                    solved=solved,
+                )
+                merge_succeeded = True
+                if merge_result:
+                    logger.info("memory merged: %s", merge_result)
+            except Exception as exc:
+                agent_error = f"memory finalization failed: {type(exc).__name__}: {exc}"
+                logger.error("%s", agent_error)
+
+        episodes_enabled = getattr(args, "explore", False) or getattr(
+            args, "record_episodes", False
+        )
+        if (
+            episodes_enabled
+            and memory_manager is not None
+            and (merge_succeeded or not merge_required)
+        ):
+            record_episode(
+                memory_manager,
+                run_state_dir=episode_state_dir,
+                cell_tag=run_config.recipe_tag,
+                robot=robot_name,
+                task_desc=task_desc,
+                finish_result=finish_result,
+                stats=stats,
+                elapsed_s=elapsed,
+                memory_version=prompt_vars.get("memory_version"),
+                environment_success=environment_success,
+                allow_read_only_write=getattr(args, "record_episodes", False),
+                embedding_client=runtime_kwargs.get("embedding_client"),
+                milvus_uri=getattr(args, "milvus_uri", None),
+            )
+
+        return 1 if agent_error else 0
+    finally:
+        for daemon in deferred_daemons:
+            daemon.stop()
 
 
 if __name__ == "__main__":
