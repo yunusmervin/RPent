@@ -64,6 +64,7 @@ def get_memory_backend(name: str = "filesystem", **kwargs) -> MemoryBackend:
     backend_class = kwargs.pop("_backend_class", FileSystemBackend)
     agfs_endpoint = kwargs.pop("agfs_endpoint", None)
     robot = kwargs.pop("robot", None)
+    record_episodes = kwargs.pop("record_episodes", False)
     if name == "filesystem":
         return backend_class(**kwargs)
     if name == "agfs":
@@ -71,6 +72,7 @@ def get_memory_backend(name: str = "filesystem", **kwargs) -> MemoryBackend:
             kwargs["agfs_endpoint"] = agfs_endpoint
         if robot is not None:
             kwargs["robot"] = robot
+        kwargs["record_episodes"] = record_episodes
         try:
             return AGFSBackend(**kwargs)
         except AGFSStartupError as exc:
