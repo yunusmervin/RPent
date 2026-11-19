@@ -53,6 +53,8 @@ class RunConfig:
     memory_backend: str = "filesystem"
     agfs_endpoint: str | None = None
     record_episodes: bool = False
+    episode_search_enabled: bool = False
+    milvus_uri: str | None = None
 
 
 @dataclass(frozen=True)

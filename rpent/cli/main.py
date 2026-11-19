@@ -232,7 +232,12 @@ def _build_argparser() -> argparse.ArgumentParser:
         "--milvus-uri",
         default=None,
         help="Milvus Standalone URI or local DB path. Defaults to "
-        "memory/<robot>/.milvus/episodes.db when episode recording is enabled.",
+        "memory/<robot>/.milvus/episodes.db when episode memory is enabled.",
+    )
+    ap.add_argument(
+        "--enable-episode-search",
+        action="store_true",
+        help="Expose readonly semantic episode search when the selected index exists.",
     )
     ap.add_argument(
         "--memory-repo",
@@ -500,6 +505,8 @@ def main() -> int:
             memory_backend=getattr(args, "memory_backend", "filesystem"),
             agfs_endpoint=getattr(args, "agfs_endpoint", None),
             record_episodes=getattr(args, "record_episodes", False),
+            episode_search_enabled=getattr(args, "enable_episode_search", False),
+            milvus_uri=getattr(args, "milvus_uri", None),
         )
     except (OSError, ValueError) as exc:
         parser.error(str(exc))

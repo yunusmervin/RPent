@@ -1359,6 +1359,10 @@ def view_env_state(
         "artifacts": sorted(record.artifacts),
     }
     out["task_language"] = extras.get("task_language")
+    if "agentview.png" in record.artifacts:
+        out["current_frame_uri"] = (
+            state.artifact_path("agentview.png", step=nn).resolve().as_uri()
+        )
     out["log"] = {
         "command": record.command,
         "result": record.result,

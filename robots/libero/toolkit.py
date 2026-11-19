@@ -28,6 +28,7 @@ from typing import TYPE_CHECKING, Any
 
 from robots.libero import tools as libero_tools
 from rpent.dashboard.events import DashboardEventSink
+from rpent.episode.search_tool import register_episode_search
 from rpent.session import EnvState
 from rpent.tools import ToolResult, iter_tools
 from rpent.tools.base import tool
@@ -55,6 +56,9 @@ class LiberoToolkit(Toolkit):
         attempts_per_session: int = 0,
         state_output_dir: Path | str | None = None,
         policy_kind: str = "vla",
+        episode_search_enabled: bool = False,
+        memory_version: str = "unversioned",
+        milvus_uri: str | None = None,
     ) -> None:
         if mode not in {"evaluation", "exploration"}:
             raise ValueError(f"unsupported LIBERO toolkit mode: {mode!r}")
@@ -76,6 +80,16 @@ class LiberoToolkit(Toolkit):
         self._session_attempt: int = 1
         self.init_primitives(runtime_kwargs=runtime_kwargs)
         self._register_libero_tools()
+        self._episode_search = register_episode_search(
+            self,
+            enabled=episode_search_enabled,
+            robot="libero",
+            memory_version=memory_version,
+            embedding_client=self._embedding_client,
+            memory_root=memory.root,
+            milvus_uri=milvus_uri,
+            episodes_dir=getattr(memory, "episodes_dir", None),
+        )
         if policy_kind == "wam":
             finish = self._tools["finish"]
             self.add_tool(
@@ -265,6 +279,9 @@ class LiberoToolkit(Toolkit):
 
     def close(self) -> None:
         """Finalize collected data and save the episode video independently."""
+        episode_search = getattr(self, "_episode_search", None)
+        if episode_search is not None:
+            episode_search.close()
         super().close()
         try:
             episode = self._primitives.finalize_flywheel()
