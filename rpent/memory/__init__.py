@@ -14,11 +14,14 @@
 
 """Cross-session, mutable memory corpus."""
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from rpent.memory.agfs_backend import AGFSBackend
 from rpent.memory.backend import MemoryBackend, get_memory_backend
 from rpent.memory.manager import FileSystemBackend
+
+if TYPE_CHECKING:
+    from rpent.memory.manager import MemoryManager
 
 
 def __getattr__(name: str) -> Any:

@@ -279,8 +279,9 @@ class LiberoToolkit(Toolkit):
 
     def close(self) -> None:
         """Finalize collected data and save the episode video independently."""
-        if self._episode_search is not None:
-            self._episode_search.close()
+        episode_search = getattr(self, "_episode_search", None)
+        if episode_search is not None:
+            episode_search.close()
         super().close()
         try:
             episode = self._primitives.finalize_flywheel()
