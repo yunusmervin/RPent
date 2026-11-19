@@ -210,6 +210,8 @@ def _run_dashboard_task(
         robot_spec.parse_config(task_args),
         memory_backend=getattr(task_args, "memory_backend", "filesystem"),
         agfs_endpoint=getattr(task_args, "agfs_endpoint", None),
+        episode_search_enabled=getattr(task_args, "enable_episode_search", False),
+        milvus_uri=getattr(task_args, "milvus_uri", None),
     )
     from rpent.memory.loading import prepare_run_memory
 
