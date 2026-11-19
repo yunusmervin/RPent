@@ -20,9 +20,12 @@ import json
 from collections.abc import Mapping
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from rpent.episode.writer import EpisodeStore, EpisodeWriter
+
+if TYPE_CHECKING:
+    from rpent.episode.milvus_sink import EpisodeEncoder
 from rpent.utils.logging import get_logger
 
 logger = get_logger("episode")
@@ -41,7 +44,9 @@ def _outcome(
     return "failure"
 
 
-def _task_desc(run_state_dir: Path, cell_tag: str, task_desc: Mapping[str, Any]) -> dict[str, Any]:
+def _task_desc(
+    run_state_dir: Path, cell_tag: str, task_desc: Mapping[str, Any]
+) -> dict[str, Any]:
     merged = dict(task_desc)
     audit_path = run_state_dir / f"{cell_tag}.json"
     if audit_path.is_file():
@@ -66,6 +71,8 @@ def record_episode(
     environment_success: bool | None = None,
     allow_read_only_write: bool = False,
     created_at: datetime | None = None,
+    embedding_client: EpisodeEncoder | None = None,
+    milvus_uri: str | None = None,
 ) -> str | None:
     try:
         if allow_read_only_write:
@@ -84,6 +91,26 @@ def record_episode(
             memory_version=memory_version,
             created_at=created_at,
         )
+        if embedding_client is not None:
+            try:
+                from rpent.episode.milvus_sink import MilvusEpisodeSink
+
+                sink = MilvusEpisodeSink(
+                    embedding_client,
+                    memory_root=store.root,
+                    milvus_uri=milvus_uri,
+                )
+                try:
+                    sink.upsert(episode, uri)
+                finally:
+                    sink.close()
+            except Exception as exc:
+                logger.warning(
+                    "episode indexing failed; canonical episode remains at %s: %s: %s",
+                    uri,
+                    type(exc).__name__,
+                    exc,
+                )
         logger.info("episode recorded: %s (%s)", episode.episode_id, uri)
         return uri
     except Exception as exc:

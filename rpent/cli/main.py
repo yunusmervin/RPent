@@ -229,6 +229,12 @@ def _build_argparser() -> argparse.ArgumentParser:
         help="Reserved endpoint for a dedicated episode store.",
     )
     ap.add_argument(
+        "--milvus-uri",
+        default=None,
+        help="Milvus Standalone URI or local DB path. Defaults to "
+        "memory/<robot>/.milvus/episodes.db when episode recording is enabled.",
+    )
+    ap.add_argument(
         "--memory-repo",
         default=None,
         help="HF dataset owner/repo or https://huggingface.co/datasets/owner/repo@revision.",
@@ -840,6 +846,8 @@ def main() -> int:
             memory_version=prompt_vars.get("memory_version"),
             environment_success=environment_success,
             allow_read_only_write=getattr(args, "record_episodes", False),
+            embedding_client=runtime_kwargs.get("embedding_client"),
+            milvus_uri=getattr(args, "milvus_uri", None),
         )
 
     return 1 if agent_error else 0
