@@ -26,6 +26,7 @@ from rpent.cli.main import _build_argparser
 from rpent.episode.hook import record_episode
 from rpent.episode.writer import EpisodeWriter
 from rpent.memory import AGFSBackend
+from rpent.utils.config import EMBEDDING_MODEL_ID
 
 CREATED = datetime(2026, 11, 10, 3, 15, tzinfo=UTC)
 
@@ -95,7 +96,7 @@ def test_writer_selects_key_frames_and_is_idempotent(tmp_path: Path) -> None:
     assert first_episode.episode_id == "libero10_swap_t2_s0_20261110T031500"
     assert first_episode.memory_ids == ["task-family_libero10_swap_t2"]
     assert first_episode.memory_version == "unversioned"
-    assert first_episode.embedding_model == "pending"
+    assert first_episode.embedding_model == EMBEDDING_MODEL_ID
     assert first_episode.assets.failure_frames == []
     assert len(first_episode.assets.seg_overlays) == 1
 

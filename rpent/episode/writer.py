@@ -24,9 +24,10 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from rpent.episode.model import Episode, EpisodeAssets, EpisodeStats
+from rpent.utils.config import EMBEDDING_MODEL_ID
 
 DEFAULT_MEMORY_VERSION = "unversioned"
-EMBEDDING_MODEL_PLACEHOLDER = "pending"
+EMBEDDING_MODEL_PLACEHOLDER = EMBEDDING_MODEL_ID
 _REGIMES = {"task", "swap", "lan", "object"}
 _OVERLAY = re.compile(r"segment_overlay_(\d+)\.png$")
 

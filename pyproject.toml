@@ -82,6 +82,10 @@ sam3 = [
     "torchvision",
     "pillow>=10",
 ]
+embedding = [
+    "sentence-transformers>=5.2",
+    "pillow>=10",
+]
 molmo = [
     # Molmo's remote code uses transformers' video-processing API, which the
     # LIBERO extra cannot supply: OpenPI pins transformers==4.53.2 exactly, and
