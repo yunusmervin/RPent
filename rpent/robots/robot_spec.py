@@ -52,6 +52,7 @@ class RunConfig:
     enable_direct_action: bool = False
     memory_backend: str = "filesystem"
     agfs_endpoint: str | None = None
+    record_episodes: bool = False
 
 
 @dataclass(frozen=True)

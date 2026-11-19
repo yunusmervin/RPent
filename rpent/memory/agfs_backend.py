@@ -73,7 +73,7 @@ def _wait_for_agfs_ready(
 
 
 class AGFSBackend(FileSystemBackend):
-    """Expose one robot's corpus, frames, and transcripts through AGFS.
+    """Expose one robot's corpus, frames, episodes, and transcripts through AGFS.
 
     Corpus operations use the same local paths and authorization logic as
     :class:`FileSystemBackend`. The AGFS mounts therefore provide another view
@@ -88,8 +88,10 @@ class AGFSBackend(FileSystemBackend):
         inbox_cell_tag: str | None = None,
         agfs_endpoint: str | None = None,
         frames_dir: str | Path | None = None,
+        episodes_dir: str | Path | None = None,
         transcripts_dir: str | Path | None = None,
         robot: str | None = None,
+        record_episodes: bool = False,
         server_bin: str = "agfs-server",
         startup_timeout_s: float = 10.0,
     ) -> None:
@@ -103,9 +105,13 @@ class AGFSBackend(FileSystemBackend):
             raise ValueError(f"invalid AGFS robot name: {self._robot!r}")
         storage_root = self.root / "_internal" / "agfs"
         self._frames_dir = self._storage_path(frames_dir, storage_root / "frames")
+        self._episodes_dir = self._storage_path(
+            episodes_dir, storage_root / "episodes"
+        )
         self._transcripts_dir = self._storage_path(
             transcripts_dir, storage_root / "transcripts"
         )
+        self._episode_recording = record_episodes
         self._endpoint = (
             _normalize_endpoint(agfs_endpoint) if agfs_endpoint is not None else None
         )
@@ -142,15 +148,21 @@ class AGFSBackend(FileSystemBackend):
         return self._frames_dir
 
     @property
+    def episodes_dir(self) -> Path:
+        return self._episodes_dir
+
+    @property
     def transcripts_dir(self) -> Path:
         return self._transcripts_dir
 
     def _mounts(self) -> list[dict[str, Any]]:
-        mounts = (
+        mounts = [
             (f"corpus-{self._robot}", f"/corpus/{self._robot}", self.root),
             ("frames", "/frames", self.frames_dir),
             ("transcripts", "/transcripts", self.transcripts_dir),
-        )
+        ]
+        if self._memory_access == "inbox_write" or self._episode_recording:
+            mounts.append(("episodes", "/episodes", self.episodes_dir))
         return [
             {
                 "name": name,
@@ -201,8 +213,10 @@ class AGFSBackend(FileSystemBackend):
         )
         self._daemon = daemon
         try:
-            if self._memory_access == "inbox_write":
+            if self._memory_access == "inbox_write" or self._episode_recording:
                 self.frames_dir.mkdir(parents=True, exist_ok=True)
+                self.episodes_dir.mkdir(parents=True, exist_ok=True)
+            if self._memory_access == "inbox_write":
                 self.transcripts_dir.mkdir(parents=True, exist_ok=True)
             daemon.start()
             _wait_for_agfs_ready(
@@ -220,9 +234,13 @@ class AGFSBackend(FileSystemBackend):
             raise AGFSStartupError(f"failed to start agfs-server: {exc}") from exc
         logger.info("AGFS ready at %s for robot %s", self.endpoint, self._robot)
 
+    def enable_episode_recording(self) -> None:
+        """Allow frame and episode writes without enabling corpus writes."""
+        self._episode_recording = True
+
     def put_frame(self, png_bytes: bytes) -> str:
         """Store PNG bytes by SHA256 and return their stable AGFS URI."""
-        if self._memory_access != "inbox_write":
+        if self._memory_access != "inbox_write" and not self._episode_recording:
             raise PermissionError("writing frames is denied in this mode")
         if not isinstance(png_bytes, bytes):
             raise TypeError("png_bytes must be bytes")
@@ -242,6 +260,46 @@ class AGFSBackend(FileSystemBackend):
         try:
             with os.fdopen(fd, "wb") as stream:
                 stream.write(png_bytes)
+            os.replace(temporary, destination)
+        finally:
+            temporary.unlink(missing_ok=True)
+        return uri
+
+    def put_episode(
+        self,
+        *,
+        memory_version: str,
+        episode_id: str,
+        payload: bytes,
+    ) -> str:
+        """Atomically store one canonical episode JSON document."""
+        if self._memory_access != "inbox_write" and not self._episode_recording:
+            raise PermissionError("writing episodes is denied in this mode")
+        for component in (memory_version, episode_id):
+            if (
+                not component
+                or component in {".", ".."}
+                or Path(component).name != component
+                or "/" in component
+                or "\\" in component
+            ):
+                raise ValueError(f"invalid episode path component: {component!r}")
+        if not isinstance(payload, bytes):
+            raise TypeError("payload must be bytes")
+        destination = self.episodes_dir / memory_version / f"{episode_id}.json"
+        uri = f"agfs://episodes/{memory_version}/{episode_id}.json"
+        if destination.exists():
+            return uri
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        fd, temporary_name = tempfile.mkstemp(
+            dir=destination.parent,
+            prefix=f".{episode_id}.",
+            suffix=".tmp",
+        )
+        temporary = Path(temporary_name)
+        try:
+            with os.fdopen(fd, "wb") as stream:
+                stream.write(payload)
             os.replace(temporary, destination)
         finally:
             temporary.unlink(missing_ok=True)

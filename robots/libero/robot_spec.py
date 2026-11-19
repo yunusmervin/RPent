@@ -158,6 +158,7 @@ def get_toolkit(
         inbox_cell_tag=config.recipe_tag if explore else None,
         agfs_endpoint=config.agfs_endpoint,
         robot="libero",
+        record_episodes=getattr(config, "record_episodes", False),
     )
     return LiberoToolkit(
         runtime_kwargs=runtime_kwargs,

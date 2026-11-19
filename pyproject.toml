@@ -274,6 +274,7 @@ exclude = ["tests*", "docs*", "examples*", "docker*", "toolkits*"]
 
 [tool.pytest.ini_options]
 addopts = ["--import-mode=importlib"]
+filterwarnings = ["ignore"]
 pythonpath = ["."]
 timeout = 60
 

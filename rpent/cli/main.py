@@ -53,6 +53,7 @@ from rpent.dashboard.events import (
     NullDashboardEventSink,
     RunStartedEvent,
 )
+from rpent.episode.hook import record_episode
 from rpent.evaluation import RunFinalizationContext
 from rpent.memory import MemoryBackend
 from rpent.planner.base import (
@@ -215,6 +216,17 @@ def _build_argparser() -> argparse.ArgumentParser:
         "--agfs-endpoint",
         default=None,
         help="Attach to an existing AGFS server instead of starting one.",
+    )
+    ap.add_argument(
+        "--record-episodes",
+        action="store_true",
+        help="Record canonical episode JSON and key frames in AGFS. "
+        "Exploration enables this automatically; evaluation does not.",
+    )
+    ap.add_argument(
+        "--episode-store-endpoint",
+        default=None,
+        help="Reserved endpoint for a dedicated episode store.",
     )
     ap.add_argument(
         "--memory-repo",
@@ -481,6 +493,7 @@ def main() -> int:
             robot_spec.parse_config(args),
             memory_backend=getattr(args, "memory_backend", "filesystem"),
             agfs_endpoint=getattr(args, "agfs_endpoint", None),
+            record_episodes=getattr(args, "record_episodes", False),
         )
     except (OSError, ValueError) as exc:
         parser.error(str(exc))
@@ -590,6 +603,7 @@ def main() -> int:
     environment_success: bool | None = None
     environment_metrics: dict = {}
     memory_manager: MemoryBackend | None = None
+    episode_state_dir = Path(output_dir)
     try:
         if first_user_msg is not None:
             dashboard_events.emit(RunStartedEvent())
@@ -614,6 +628,7 @@ def main() -> int:
                 state_output_dir = (
                     output_dir / "sessions" / f"session_{session_number:03d}"
                 )
+            episode_state_dir = Path(state_output_dir)
             if getattr(robot_spec, "supports_exploration", False):
                 toolkit = get_toolkit(
                     robot_name,
@@ -783,24 +798,49 @@ def main() -> int:
             logger.error("%s", agent_error)
 
     # Publish exploration artifacts into the corpus after the session loop.
-    if (
+    merge_required = (
         getattr(args, "explore", False)
         and getattr(args, "auto_merge_memory", False)
         and not agent_error
         and not (finish_result or {}).get("operator_aborted")
         and memory_manager is not None
-    ):
+    )
+    merge_succeeded = False
+    if merge_required:
         try:
             merge_result = memory_manager.merge_memory(
                 cell_tag=run_config.recipe_tag,
                 run_state_dir=run_config.output_dir,
                 solved=solved,
             )
+            merge_succeeded = True
             if merge_result:
                 logger.info("memory merged: %s", merge_result)
         except Exception as exc:
             agent_error = f"memory finalization failed: {type(exc).__name__}: {exc}"
             logger.error("%s", agent_error)
+
+    episodes_enabled = getattr(args, "explore", False) or getattr(
+        args, "record_episodes", False
+    )
+    if (
+        episodes_enabled
+        and memory_manager is not None
+        and (merge_succeeded or not merge_required)
+    ):
+        record_episode(
+            memory_manager,
+            run_state_dir=episode_state_dir,
+            cell_tag=run_config.recipe_tag,
+            robot=robot_name,
+            task_desc=task_desc,
+            finish_result=finish_result,
+            stats=stats,
+            elapsed_s=elapsed,
+            memory_version=prompt_vars.get("memory_version"),
+            environment_success=environment_success,
+            allow_read_only_write=getattr(args, "record_episodes", False),
+        )
 
     return 1 if agent_error else 0
 
