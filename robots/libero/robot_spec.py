@@ -72,6 +72,8 @@ def _embedding_requested(args: argparse.Namespace) -> bool:
         or getattr(args, "explore", False)
         or getattr(args, "episode_search_enabled", False)
         or getattr(args, "enable_episode_search", False)
+        or getattr(args, "knowledge_search_enabled", False)
+        or getattr(args, "enable_knowledge_search", False)
     )
 
 
@@ -186,6 +188,7 @@ def get_toolkit(
         state_output_dir=state_output_dir,
         policy_kind=config.task_desc.get("policy_kind", "vla"),
         episode_search_enabled=config.episode_search_enabled,
+        knowledge_search_enabled=config.knowledge_search_enabled,
         memory_version=config.prompt_vars.get("memory_version") or "unversioned",
         milvus_uri=config.milvus_uri,
     )

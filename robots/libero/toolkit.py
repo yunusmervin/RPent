@@ -29,6 +29,8 @@ from typing import TYPE_CHECKING, Any
 from robots.libero import tools as libero_tools
 from rpent.dashboard.events import DashboardEventSink
 from rpent.episode.search_tool import register_episode_search
+from rpent.memory.knowledge import KnowledgeIndexHook
+from rpent.memory.knowledge_search import register_knowledge_search
 from rpent.session import EnvState
 from rpent.tools import ToolResult, iter_tools
 from rpent.tools.base import tool
@@ -57,6 +59,7 @@ class LiberoToolkit(Toolkit):
         state_output_dir: Path | str | None = None,
         policy_kind: str = "vla",
         episode_search_enabled: bool = False,
+        knowledge_search_enabled: bool = False,
         memory_version: str = "unversioned",
         milvus_uri: str | None = None,
     ) -> None:
@@ -90,6 +93,30 @@ class LiberoToolkit(Toolkit):
             milvus_uri=milvus_uri,
             episodes_dir=getattr(memory, "episodes_dir", None),
         )
+        self._knowledge_search = register_knowledge_search(
+            self,
+            enabled=knowledge_search_enabled,
+            robot="libero",
+            memory_version=memory_version,
+            embedding_client=self._embedding_client,
+            memory_root=memory.root,
+            milvus_uri=milvus_uri,
+        )
+        configure_index = getattr(memory, "set_knowledge_indexer", None)
+        if (
+            mode == "exploration"
+            and self._embedding_client is not None
+            and callable(configure_index)
+        ):
+            configure_index(
+                KnowledgeIndexHook(
+                    self._embedding_client,
+                    memory_root=memory.root,
+                    robot="libero",
+                    memory_version=memory_version,
+                    milvus_uri=milvus_uri,
+                )
+            )
         if policy_kind == "wam":
             finish = self._tools["finish"]
             self.add_tool(
@@ -282,6 +309,9 @@ class LiberoToolkit(Toolkit):
         episode_search = getattr(self, "_episode_search", None)
         if episode_search is not None:
             episode_search.close()
+        knowledge_search = getattr(self, "_knowledge_search", None)
+        if knowledge_search is not None:
+            knowledge_search.close()
         super().close()
         try:
             episode = self._primitives.finalize_flywheel()

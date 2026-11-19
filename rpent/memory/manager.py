@@ -22,7 +22,7 @@ import re
 import shutil
 import warnings
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 import yaml
 
@@ -128,6 +128,12 @@ def _has_local_memory(root: Path) -> bool:
     return root.is_dir() and any(path.is_file() for path in root.rglob("*"))
 
 
+class KnowledgeIndexer(Protocol):
+    """Optional derived index updated only after canonical leaves are published."""
+
+    def upsert_paths(self, paths: list[Path]) -> int: ...
+
+
 class FileSystemBackend:
     """Manage merge, validation, and synchronization for one memory corpus.
 
@@ -141,10 +147,16 @@ class FileSystemBackend:
         *,
         memory_access: str = "read_only",
         inbox_cell_tag: str | None = None,
+        knowledge_indexer: KnowledgeIndexer | None = None,
     ) -> None:
         self._root = Path(root).resolve()
         self._memory_access = memory_access
         self._inbox_cell_tag = inbox_cell_tag
+        self._knowledge_indexer = knowledge_indexer
+
+    def set_knowledge_indexer(self, indexer: KnowledgeIndexer | None) -> None:
+        """Attach a lazy index writer without changing corpus permissions."""
+        self._knowledge_indexer = indexer
 
     @property
     def root(self) -> Path:
@@ -256,6 +268,7 @@ class FileSystemBackend:
         with lock_path.open("r+") as lock_file:
             fcntl.flock(lock_file, fcntl.LOCK_EX)
             published_draft = False
+            published_leaves: set[Path] = set()
             for source in sorted(inbox.glob("*.md")):
                 try:
                     metadata, body = _split_frontmatter(source)
@@ -269,6 +282,7 @@ class FileSystemBackend:
                 published_draft = True
                 if not destination.exists():
                     destination.write_text(_render(metadata, body))
+                    published_leaves.add(destination)
                     result[metadata["scope"]] += 1
                     continue
                 try:
@@ -290,6 +304,7 @@ class FileSystemBackend:
                     continue
                 merged_metadata = _merge_evidence(old_metadata, metadata)
                 destination.write_text(_render(merged_metadata, old_body))
+                published_leaves.add(destination)
                 result["evidence"] += 1
                 if body.strip() != old_body.strip():
                     conflict = conflicts / f"{memory_id}__from_{cell_tag}.md"
@@ -317,6 +332,21 @@ class FileSystemBackend:
                     )
 
             self.rebuild_index()
+            if (
+                published_leaves
+                and self._memory_access == "inbox_write"
+                and self._knowledge_indexer is not None
+            ):
+                # Keep the lock while reading the published revision so another
+                # merge cannot overwrite newer index metadata with an older view.
+                try:
+                    self._knowledge_indexer.upsert_paths(sorted(published_leaves))
+                except Exception as exc:
+                    logger.warning(
+                        "knowledge indexing failed; canonical merge is preserved: %s: %s",
+                        type(exc).__name__,
+                        exc,
+                    )
         return result
 
     def rebuild_index(self) -> Path | None:
