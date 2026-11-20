@@ -45,7 +45,7 @@ POLICY_TOOLS = {"vpp2": "vpp2_act", "awomo05": "awomo05_act"}
 
 if TYPE_CHECKING:
     from robots.robodojo.env_client import RoboDojoEnvClient
-    from rpent.memory.manager import MemoryManager
+    from rpent.memory.backend import MemoryBackend
 
 
 class RoboDojoToolkit(Toolkit):
@@ -61,7 +61,7 @@ class RoboDojoToolkit(Toolkit):
         *,
         primitives_kwargs: dict[str, Any],
         dashboard_events: DashboardEventSink,
-        memory: MemoryManager,
+        memory: MemoryBackend,
         eval_fair: bool = False,
         mode: str = "evaluation",
         attempts_per_session: int = 5,

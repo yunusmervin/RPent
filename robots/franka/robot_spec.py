@@ -31,7 +31,7 @@ from robots.franka.runtime_config import (
 from robots.franka.tasks import FRANKA_TASKS, get_franka_task
 from rpent.dashboard.events import DashboardEventSink, RuntimeStatusEvent
 from rpent.dashboard.spec import DashboardSpec
-from rpent.memory import MemoryManager
+from rpent.memory import get_memory_backend
 from rpent.robots.components.am_runtime import add_am_args, select_am
 from rpent.robots.prompt_bundle import PromptBundle
 from rpent.robots.robot_spec import RobotSpec, RunConfig
@@ -100,8 +100,11 @@ def get_toolkit(
     """Return the Franka toolkit."""
     from robots.franka.toolkit import FrankaToolkit
 
-    memory = MemoryManager(
+    memory = get_memory_backend(
+        config.memory_backend,
         root=config.prompt_vars.get("memory_dir") or get_memory_dir("franka"),
+        agfs_endpoint=config.agfs_endpoint,
+        robot="franka",
     )
     return FrankaToolkit(
         runtime_kwargs=runtime_kwargs,

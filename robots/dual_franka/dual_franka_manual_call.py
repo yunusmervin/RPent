@@ -54,7 +54,7 @@ from robots.franka.runtime_config import (
 )
 from robots.franka.tools import view_camera_meta
 from rpent.dashboard.events import NullDashboardEventSink
-from rpent.memory.manager import MemoryManager
+from rpent.memory.backend import get_memory_backend
 from rpent.robots.components.pi05_vla_client import Pi05VLAClient
 from rpent.robots.components.sam3_client import Sam3Client
 from rpent.session import EnvState
@@ -461,8 +461,8 @@ def _call_toolkit_tool(
             "sam3_client": sam3_client,
         },
         dashboard_events=NullDashboardEventSink(),
-        memory=MemoryManager(
-            output_dir / "memory",
+        memory=get_memory_backend(
+            root=output_dir / "memory",
             memory_access="inbox_write",
             inbox_cell_tag=f"manual_{primitive}",
         ),

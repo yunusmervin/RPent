@@ -38,7 +38,7 @@ from rpent.utils.logging import get_logger, get_output_dir
 
 if TYPE_CHECKING:
     from robots.robocasa.env_client import RoboCasaEnvClient
-    from rpent.memory.manager import MemoryManager
+    from rpent.memory.backend import MemoryBackend
 
 logger = get_logger("robocasa_toolkit")
 
@@ -51,7 +51,7 @@ class RoboCasaToolkit(Toolkit):
         *,
         runtime_kwargs: dict[str, Any],
         dashboard_events: DashboardEventSink,
-        memory: MemoryManager,
+        memory: MemoryBackend,
         enable_direct_action: bool = False,
         mode: str = "evaluation",
         attempts_per_session: int = 0,

@@ -28,7 +28,7 @@ from robots.libero.prompt_bundle import system_prompt, user_prompt
 from robots.libero.suites import LIBERO_SUITE_NAMES, resolve_libero_type
 from rpent.dashboard.events import DashboardEventSink
 from rpent.dashboard.spec import DashboardSpec
-from rpent.memory import MemoryManager
+from rpent.memory import get_memory_backend
 from rpent.robots.components.am_runtime import (
     WAM_BACKENDS,
     AMConfig,
@@ -67,9 +67,37 @@ FLASH_SUITES = frozenset(
 )
 
 
+def _embedding_requested(args: argparse.Namespace) -> bool:
+    return bool(
+        getattr(args, "record_episodes", False)
+        or getattr(args, "explore", False)
+        or getattr(args, "episode_search_enabled", False)
+        or getattr(args, "enable_episode_search", False)
+        or getattr(args, "knowledge_search_enabled", False)
+        or getattr(args, "enable_knowledge_search", False)
+    )
+
+
 def _resolve_dashboard(args: argparse.Namespace) -> DashboardSpec:
     """Build the Dashboard configuration for the selected action model."""
     kind = "wam" if getattr(args, "am_backend", None) in WAM_BACKENDS else "vla"
+    runtime_components = [
+        {"name": "env", "label": "ENV", "scope": "unique"},
+        {"name": kind, "label": kind.upper(), "scope": "shared"},
+        {"name": "sam3", "label": "SAM3", "scope": "shared"},
+    ]
+    if _embedding_requested(args):
+        runtime_components.append(
+            {"name": "embedding", "label": "Embedding", "scope": "shared"}
+        )
+    runtime_components.append(
+        {
+            "name": "molmo",
+            "label": "Molmo",
+            "scope": "shared",
+            **({} if getattr(args, "geometry", False) else {"planners": ("flash",)}),
+        }
+    )
     return {
         "task": {
             "command": "/rpent-task",
@@ -82,19 +110,7 @@ def _resolve_dashboard(args: argparse.Namespace) -> DashboardSpec:
             "display": "{suite} / task {task} / seed {seed}",
             "output_slug": "{suite}_t{task}_s{seed}",
         },
-        "runtime_components": (
-            {"name": "env", "label": "ENV", "scope": "unique"},
-            {"name": kind, "label": kind.upper(), "scope": "shared"},
-            {"name": "sam3", "label": "SAM3", "scope": "shared"},
-            {
-                "name": "molmo",
-                "label": "Molmo",
-                "scope": "shared",
-                **(
-                    {} if getattr(args, "geometry", False) else {"planners": ("flash",)}
-                ),
-            },
-        ),
+        "runtime_components": tuple(runtime_components),
         "primitives": (
             "move_to",
             "pi0_pick",
@@ -179,10 +195,14 @@ def get_toolkit(
     from robots.libero.toolkit import LiberoToolkit
 
     explore = mode == "exploration"
-    memory = MemoryManager(
+    memory = get_memory_backend(
+        config.memory_backend,
         root=config.prompt_vars.get("memory_dir") or get_memory_dir("libero"),
         memory_access="inbox_write" if explore else "read_only",
         inbox_cell_tag=config.recipe_tag if explore else None,
+        agfs_endpoint=config.agfs_endpoint,
+        robot="libero",
+        record_episodes=getattr(config, "record_episodes", False),
     )
     primitive_kwargs = dict(runtime_kwargs)
     geometry_grounder = primitive_kwargs.pop("geometry_grounder", None)
@@ -197,6 +217,10 @@ def get_toolkit(
         attempts_per_session=attempts_per_session,
         state_output_dir=state_output_dir,
         policy_kind=config.task_desc.get("policy_kind", "vla"),
+        episode_search_enabled=config.episode_search_enabled,
+        knowledge_search_enabled=config.knowledge_search_enabled,
+        memory_version=config.prompt_vars.get("memory_version") or "unversioned",
+        milvus_uri=config.milvus_uri,
     )
 
 
@@ -293,6 +317,17 @@ def _add_cli_args(parser: argparse.ArgumentParser, use_dashboard: bool) -> None:
         "If unset, a local SAM3 server is spawned.",
     )
     parser.add_argument(
+        "--embedding-endpoint",
+        default=None,
+        help="host:port or HTTP URL of an existing embedding server. "
+        "If unset, a local server is spawned when episode memory requires it.",
+    )
+    parser.add_argument(
+        "--embedding-model-path",
+        default=None,
+        help="Qwen3-VL embedding model path (defaults to EMBEDDING_MODEL_PATH).",
+    )
+    parser.add_argument(
         "--env-cuda-device",
         type=int,
         default=None,
@@ -305,6 +340,13 @@ def _add_cli_args(parser: argparse.ArgumentParser, use_dashboard: bool) -> None:
         default=None,
         help="GPU ordinal for the local SAM3 service; may share GPUs with other "
         "services. Defaults to --cuda-device, then inherits CUDA_VISIBLE_DEVICES.",
+    )
+    parser.add_argument(
+        "--embedding-cuda-device",
+        type=int,
+        default=None,
+        help="GPU ordinal for the local embedding service; may share GPUs with "
+        "other services. Defaults to --cuda-device.",
     )
 
 
@@ -571,6 +613,41 @@ def _spawn_sam3_server(
     return daemon, HttpRpcClient(f"http://{host}:{port}")
 
 
+def _spawn_embedding_server(
+    args: argparse.Namespace,
+    output_dir: Path,
+) -> tuple[ProcessDaemon | None, RpcClient]:
+    if args.embedding_endpoint is not None:
+        return None, make_rpc_client(args.embedding_endpoint)
+
+    host, port = "127.0.0.1", pick_free_port()
+    device = resolve_cuda_device(args, "embedding")
+    model_path = args.embedding_model_path
+    daemon = ProcessDaemon(
+        name="embedding_server",
+        cmd=[
+            sys.executable,
+            "-m",
+            "rpent.robots.components.embedding_server",
+            "--host",
+            host,
+            "--port",
+            str(port),
+            "--parent-watch",
+            *(["--embedding-model-path", model_path] if model_path else []),
+            *(["--cuda-device", str(device)] if device is not None else []),
+            *(
+                ["--agfs-endpoint", args.agfs_endpoint]
+                if getattr(args, "agfs_endpoint", None)
+                else []
+            ),
+        ],
+        log_path=str(output_dir / "embedding_server.log"),
+    )
+    daemon.start()
+    return daemon, HttpRpcClient(f"http://{host}:{port}")
+
+
 def _connect_molmo_server(
     args: argparse.Namespace,
 ) -> tuple[ProcessDaemon | None, RpcClient]:
@@ -607,6 +684,7 @@ def _init_runtime(
 ) -> tuple[list[ProcessDaemon], dict[str, Any]]:
     """Initialize every LIBERO component, or only ``components`` when given."""
     from robots.libero.env_client import LiberoEnvClient
+    from rpent.robots.components.embedding_client import EmbeddingClient
     from rpent.robots.components.sam3_client import Sam3Client
 
     am = select_am(args, "libero")
@@ -620,6 +698,7 @@ def _init_runtime(
             else _spawn_vla_server(args, output_dir)
         ),
         "sam3": lambda: _spawn_sam3_server(args, output_dir),
+        "embedding": lambda: _spawn_embedding_server(args, output_dir),
         "molmo": lambda: _connect_molmo_server(args),
     }
     connectors = {
@@ -636,9 +715,12 @@ def _init_runtime(
         },
         policy_kind: lambda rpc: {"model": _make_model_client(rpc, wam)},
         "sam3": lambda rpc: {"sam3_client": Sam3Client(rpc)},
+        "embedding": lambda rpc: {"embedding_client": EmbeddingClient(rpc)},
         "molmo": lambda rpc: _molmo_clients(args, rpc),
     }
     selected = set(starters) if components is None else set(components)
+    if components is None and not _embedding_requested(args):
+        selected.discard("embedding")
     if getattr(args, "planner", None) != "flash" and not getattr(
         args, "geometry", False
     ):
@@ -659,7 +741,7 @@ def _init_runtime(
             )
 
     runtime_kwargs: dict[str, Any] = {}
-    wait_order = ("env", "sam3", "molmo", policy_kind)
+    wait_order = ("env", "sam3", "embedding", "molmo", policy_kind)
     for component in (name for name in wait_order if name in pending):
         daemon, rpc = pending[component]
         component_kwargs = try_wait_server(

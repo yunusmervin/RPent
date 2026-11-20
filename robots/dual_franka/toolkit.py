@@ -39,7 +39,7 @@ from rpent.tools.toolkit import ToolCancelled, ToolResult
 from rpent.utils.logging import get_output_dir
 
 if TYPE_CHECKING:
-    from rpent.memory import MemoryManager
+    from rpent.memory import MemoryBackend
 
 OperatorReader = Callable[[str, Callable[[], None]], str | None]
 
@@ -71,7 +71,7 @@ class DualFrankaToolkit(FrankaToolkit):
         *,
         runtime_kwargs: dict[str, Any],
         dashboard_events: DashboardEventSink,
-        memory: MemoryManager,
+        memory: MemoryBackend,
         mode: str = "evaluation",
         attempts_per_session: int = 0,
         state_output_dir: Path | str | None = None,

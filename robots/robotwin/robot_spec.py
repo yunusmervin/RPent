@@ -31,7 +31,7 @@ from robots.robotwin.observation import ROBOTWIN_CAMERAS
 from robots.robotwin.prompt_bundle import system_prompt, user_prompt
 from rpent.dashboard.events import DashboardEventSink, RuntimeStatusEvent
 from rpent.dashboard.spec import DashboardSpec
-from rpent.memory import MemoryManager
+from rpent.memory import get_memory_backend
 from rpent.robots.components.am_runtime import (
     WAM_BACKENDS,
     add_am_args,
@@ -273,10 +273,13 @@ def get_toolkit(
     """Return the RoboTwin toolkit for the current session."""
     from robots.robotwin.toolkit import RoboTwinToolkit
 
-    memory = MemoryManager(
+    memory = get_memory_backend(
+        config.memory_backend,
         root=config.prompt_vars.get("memory_dir") or get_memory_dir("robotwin"),
         memory_access="inbox_write" if mode == "exploration" else "read_only",
         inbox_cell_tag=config.recipe_tag if mode == "exploration" else None,
+        agfs_endpoint=config.agfs_endpoint,
+        robot="robotwin",
     )
     return RoboTwinToolkit(
         runtime_kwargs=runtime_kwargs,

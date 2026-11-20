@@ -23,15 +23,15 @@ from rpent.tools.base import ToolResult, tool
 from rpent.utils.logging import get_output_dir
 
 if TYPE_CHECKING:
-    from rpent.memory import MemoryManager
+    from rpent.memory import MemoryBackend
 
 
 class CommonTools:
     """Bind common tools to the current run's memory access policy."""
 
-    def __init__(self, *, memory: MemoryManager) -> None:
+    def __init__(self, *, memory: MemoryBackend) -> None:
         if memory is None:
-            raise TypeError("memory must be a MemoryManager, not None")
+            raise TypeError("memory must be a MemoryBackend, not None")
         self._memory = memory
         self._file_lock = threading.Lock()
 

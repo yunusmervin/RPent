@@ -30,7 +30,7 @@ from rpent.tools.toolkit import Toolkit
 from rpent.utils.logging import get_output_dir
 
 if TYPE_CHECKING:
-    from rpent.memory.manager import MemoryManager
+    from rpent.memory.backend import MemoryBackend
 
 
 class FrankaToolkit(Toolkit):
@@ -44,7 +44,7 @@ class FrankaToolkit(Toolkit):
         *,
         runtime_kwargs: dict[str, Any],
         dashboard_events: DashboardEventSink,
-        memory: MemoryManager,
+        memory: MemoryBackend,
         state_output_dir: Path | str | None = None,
     ) -> None:
         runtime_kwargs = dict(runtime_kwargs)

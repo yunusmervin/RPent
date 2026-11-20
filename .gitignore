@@ -28,3 +28,5 @@ build/
 
 # Standalone calibration environment.
 .venv-calibration/
+
+docs/prompt.md
