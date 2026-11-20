@@ -14,6 +14,28 @@
 
 """Cross-session, mutable memory corpus."""
 
-from rpent.memory.manager import MemoryManager
+from typing import TYPE_CHECKING, Any
 
-__all__ = ["MemoryManager"]
+from rpent.memory.agfs_backend import AGFSBackend
+from rpent.memory.backend import MemoryBackend, get_memory_backend
+from rpent.memory.manager import FileSystemBackend
+
+if TYPE_CHECKING:
+    from rpent.memory.manager import MemoryManager
+
+
+def __getattr__(name: str) -> Any:
+    if name == "MemoryManager":
+        from rpent.memory.manager import MemoryManager
+
+        return MemoryManager
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+__all__ = [
+    "AGFSBackend",
+    "FileSystemBackend",
+    "MemoryBackend",
+    "MemoryManager",
+    "get_memory_backend",
+]

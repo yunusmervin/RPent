@@ -31,9 +31,9 @@ from prompt_toolkit.key_binding.bindings.named_commands import get_by_name
 from prompt_toolkit.patch_stdout import patch_stdout
 from prompt_toolkit.styles import Style
 
-#: Interactive-mode command tokens (case-insensitive). This module is the single
-#: source of truth; ``api_loop`` imports ``QUIT_TOKENS`` for its steering checks.
-QUIT_TOKENS = frozenset({"/quit", "/exit", "/q"})
+from rpent.utils.interactive import QUIT_TOKENS
+from rpent.utils.interactive import next_user_line as next_user_line
+
 HELP_TOKENS = frozenset({"/help", "/h", "help", "?"})
 _HELP_TEXT = """Interactive commands:
     /help, /h, help, ? Show this help.
@@ -153,6 +153,7 @@ def start_interactive_reader(
     *,
     first_prompt_default: str | None = None,
     line_handler: Callable[[str], bool] | None = None,
+    on_user_line: Callable[[str], None] | None = None,
     on_close: Callable[[], None] | None = None,
     extra_help: str = "",
 ) -> threading.Thread:
@@ -189,6 +190,8 @@ def start_interactive_reader(
                             continue
                         if line_handler is not None and line_handler(line):
                             continue
+                        if on_user_line is not None:
+                            on_user_line(line)
                         input_queue.put(line)
                         pending_default = None
                         if line.strip().lower() in QUIT_TOKENS:
@@ -201,25 +204,6 @@ def start_interactive_reader(
     thread = threading.Thread(target=_read, name="interactive-input", daemon=True)
     thread.start()
     return thread
-
-
-def next_user_line(input_queue: "queue.Queue[str | None]") -> str | None:
-    """Block for the next actionable user line from an interactive input queue.
-
-    Returns the trimmed line, or ``None`` when the session should end (the queue
-    yielded ``None`` or a quit token such as ``/quit``). Empty lines are skipped.
-    This is a blocking call; async callers should wrap it with
-    :func:`asyncio.to_thread`.
-    """
-    while True:
-        line = input_queue.get()
-        if line is None:
-            return None
-        line = line.strip()
-        if line.lower() in QUIT_TOKENS:
-            return None
-        if line:
-            return line
 
 
 def initial_user_message(

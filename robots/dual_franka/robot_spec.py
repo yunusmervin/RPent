@@ -34,7 +34,7 @@ from robots.franka.runtime_config import (
 )
 from rpent.dashboard.events import DashboardEventSink, RuntimeStatusEvent
 from rpent.dashboard.spec import DashboardSpec
-from rpent.memory import MemoryManager
+from rpent.memory import get_memory_backend
 from rpent.robots.components.am_runtime import (
     AMConfig,
     add_am_args,
@@ -139,10 +139,13 @@ def get_toolkit(
     from robots.dual_franka.toolkit import DualFrankaToolkit
 
     explore = mode == "exploration"
-    memory = MemoryManager(
+    memory = get_memory_backend(
+        config.memory_backend,
         root=config.prompt_vars.get("memory_dir") or get_memory_dir("dual_franka"),
         memory_access="inbox_write" if explore else "read_only",
         inbox_cell_tag=config.recipe_tag if explore else None,
+        agfs_endpoint=config.agfs_endpoint,
+        robot="dual_franka",
     )
     return DualFrankaToolkit(
         runtime_kwargs=runtime_kwargs,

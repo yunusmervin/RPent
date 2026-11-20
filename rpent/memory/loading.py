@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from argparse import Namespace
 
-from rpent.memory import MemoryManager
+from rpent.memory import get_memory_backend
 from rpent.memory.source import prepare_explicit_source
 from rpent.planner.base import resolve_model
 from rpent.robots.robot_spec import RobotSpec, RunConfig
@@ -42,4 +42,6 @@ def prepare_run_memory(args: Namespace, spec: RobotSpec, config: RunConfig) -> N
         config.prompt_vars["memory_dir"] = str(root)
         args.memory_dir = str(root)
         return
-    MemoryManager(get_memory_dir(spec.name)).sync(remote_repo=spec.memory_repo_id)
+    get_memory_backend(root=get_memory_dir(spec.name)).sync(
+        remote_repo=spec.memory_repo_id
+    )

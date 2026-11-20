@@ -25,7 +25,6 @@ from collections import deque
 from collections.abc import Callable
 from typing import Any
 
-from rpent.cli.tui import next_user_line
 from rpent.dashboard.events import DashboardEventSink, TranscriptEvent
 from rpent.dashboard.interaction import DashboardInteractionPort, DashboardMessage
 from rpent.dashboard.planner_control import PlannerInteractionControl
@@ -34,6 +33,7 @@ from rpent.planner.utils.agent_runtime import AgentArtifacts, write_jsonl
 from rpent.planner.utils.http_mcp_server import HttpMcpServer
 from rpent.tools import ToolResult
 from rpent.tools.toolkit import Toolkit
+from rpent.utils.interactive import next_user_line
 from rpent.utils.logging import get_logger
 
 logger = get_logger("agent_session")

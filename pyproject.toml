@@ -50,6 +50,9 @@ dependencies = [
     "huggingface_hub>=0.24",
     "prompt-toolkit>=3.0.48",
     "numpy",
+    "pymilvus==3.0.2",
+    "milvus-lite==3.2.2",
+    "pyarrow>=15,<26",
     "scipy",
     "imageio>=2.0",
     "PyYAML>=6.0",
@@ -59,6 +62,7 @@ dependencies = [
 rpent = "rpent.cli.main:main"
 rpent-memory = "rpent.cli.memory:main"
 rpent-check-llm = "rpent.cli.check_llm:main"
+rpent-session-memory = "rpent.session_memory.service:main"
 rpent-flywheel = "rpent.flywheel.cli:main"
 
 [project.urls]
@@ -85,6 +89,13 @@ sam3 = [
     "torch",
     "torchvision",
     "pillow>=10",
+]
+embedding = [
+    "sentence-transformers>=5.2",
+    "pillow>=10",
+]
+session-memory = [
+    "mem0ai>=0.1.100,<2",
 ]
 molmo = [
     # Molmo's remote code uses transformers' video-processing API, which the
@@ -284,6 +295,7 @@ exclude = ["tests*", "docs*", "examples*", "docker*"]
 
 [tool.pytest.ini_options]
 addopts = ["--import-mode=importlib"]
+filterwarnings = ["ignore"]
 pythonpath = ["."]
 timeout = 60
 

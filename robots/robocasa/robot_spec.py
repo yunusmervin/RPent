@@ -27,7 +27,7 @@ from typing import TYPE_CHECKING, Any
 from robots.robocasa.eval.result import finalize_cell_result
 from robots.robocasa.memory import (
     MEMORY_VERSIONS,
-    RoboCasaMemoryManager,
+    RoboCasaMemoryBackend,
     TaskMemory,
     memory_from_variables,
     prepare_memory,
@@ -39,7 +39,7 @@ from robots.robocasa.prompt_bundle import (
 )
 from rpent.dashboard.events import DashboardEventSink
 from rpent.dashboard.spec import DashboardSpec
-from rpent.memory import MemoryManager
+from rpent.memory import get_memory_backend
 from rpent.robots.components.am_runtime import (
     add_am_args,
     select_am,
@@ -239,10 +239,13 @@ def get_toolkit(
     from robots.robocasa.toolkit import RoboCasaToolkit
 
     if mode == "exploration":
-        memory = MemoryManager(
+        memory = get_memory_backend(
+            config.memory_backend,
             root=config.prompt_vars.get("memory_dir") or get_memory_dir("robocasa"),
             memory_access="inbox_write",
             inbox_cell_tag=config.recipe_tag,
+            agfs_endpoint=config.agfs_endpoint,
+            robot="robocasa",
         )
     else:
         selection = memory_from_variables(
@@ -252,7 +255,12 @@ def get_toolkit(
                 **config.prompt_vars,
             }
         )
-        memory = RoboCasaMemoryManager(selection, output_dir=config.output_dir)
+        memory = RoboCasaMemoryBackend(
+            selection,
+            output_dir=config.output_dir,
+            memory_backend=config.memory_backend,
+            agfs_endpoint=config.agfs_endpoint,
+        )
     return RoboCasaToolkit(
         runtime_kwargs=runtime_kwargs,
         dashboard_events=dashboard_events,

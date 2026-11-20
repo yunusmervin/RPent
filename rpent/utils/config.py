@@ -20,6 +20,8 @@ import os
 from argparse import ArgumentParser, Namespace
 from pathlib import Path
 
+EMBEDDING_MODEL_ID = "Qwen3-VL-Embedding-2B@2026.10"
+
 
 def add_cuda_device_arg(parser: ArgumentParser, *, device_type: type = int) -> None:
     """Retain the shared GPU default for existing RPent commands."""

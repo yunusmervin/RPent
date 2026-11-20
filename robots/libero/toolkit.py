@@ -30,6 +30,9 @@ import numpy as np
 
 from robots.libero import tools as libero_tools
 from rpent.dashboard.events import DashboardEventSink
+from rpent.episode.search_tool import register_episode_search
+from rpent.memory.knowledge import KnowledgeIndexHook
+from rpent.memory.knowledge_search import register_knowledge_search
 from rpent.session import EnvState
 from rpent.session.env_capture import CapturingEnvClient
 from rpent.tools import ToolResult, iter_tools
@@ -40,7 +43,7 @@ from rpent.utils.logging import get_logger, get_output_dir
 
 if TYPE_CHECKING:
     from robots.libero.env_client import LiberoEnvClient
-    from rpent.memory.manager import MemoryManager
+    from rpent.memory.backend import MemoryBackend
     from toolkits.geometry.local_point_agent import VisualGrounder
 
 logger = get_logger("libero_toolkit")
@@ -54,7 +57,7 @@ class LiberoToolkit(Toolkit):
         *,
         runtime_kwargs: dict[str, Any],
         dashboard_events: DashboardEventSink,
-        memory: MemoryManager,
+        memory: MemoryBackend,
         enable_direct_action: bool = False,
         mode: str = "evaluation",
         attempts_per_session: int = 0,
@@ -62,11 +65,18 @@ class LiberoToolkit(Toolkit):
         policy_kind: str = "vla",
         generic_tools: bool = False,
         geometry_grounder: VisualGrounder | None = None,
+        episode_search_enabled: bool = False,
+        knowledge_search_enabled: bool = False,
+        memory_version: str = "unversioned",
+        milvus_uri: str | None = None,
     ) -> None:
         if mode not in {"evaluation", "exploration"}:
             raise ValueError(f"unsupported LIBERO toolkit mode: {mode!r}")
+        runtime_kwargs = dict(runtime_kwargs)
+        self._embedding_client = runtime_kwargs.pop("embedding_client", None)
         sam3 = runtime_kwargs.get("sam3_client")
         generic_tools = generic_tools or geometry_grounder is not None
+        self._generic_tools = generic_tools
         if generic_tools and sam3 is None:
             raise ValueError("Generic localization requires a SAM3 client.")
         self._state_output_dir = Path(state_output_dir or get_output_dir())
@@ -84,7 +94,7 @@ class LiberoToolkit(Toolkit):
         self._attempts_per_session: int = max(0, int(attempts_per_session))
         self._session_attempt: int = 1
         self.init_primitives(runtime_kwargs=runtime_kwargs)
-        self._register_libero_tools(generic_tools=generic_tools)
+        self._register_libero_tools()
         self._geometry = None
         if generic_tools:
             from robots.libero.observations import LiberoGeometryObservations
@@ -115,6 +125,40 @@ class LiberoToolkit(Toolkit):
                     check_cancelled=self.raise_if_cancelled,
                 )
                 self.add_tool(self._geometry.geometry)
+        self._episode_search = register_episode_search(
+            self,
+            enabled=episode_search_enabled,
+            robot="libero",
+            memory_version=memory_version,
+            embedding_client=self._embedding_client,
+            memory_root=memory.root,
+            milvus_uri=milvus_uri,
+            episodes_dir=getattr(memory, "episodes_dir", None),
+        )
+        self._knowledge_search = register_knowledge_search(
+            self,
+            enabled=knowledge_search_enabled,
+            robot="libero",
+            memory_version=memory_version,
+            embedding_client=self._embedding_client,
+            memory_root=memory.root,
+            milvus_uri=milvus_uri,
+        )
+        configure_index = getattr(memory, "set_knowledge_indexer", None)
+        if (
+            mode == "exploration"
+            and self._embedding_client is not None
+            and callable(configure_index)
+        ):
+            configure_index(
+                KnowledgeIndexHook(
+                    self._embedding_client,
+                    memory_root=memory.root,
+                    robot="libero",
+                    memory_version=memory_version,
+                    milvus_uri=milvus_uri,
+                )
+            )
         if policy_kind == "wam":
             finish = self._tools["finish"]
             self.add_tool(
@@ -136,7 +180,8 @@ class LiberoToolkit(Toolkit):
     # ------------------------------------------------------------------
     # Registration
     # ------------------------------------------------------------------
-    def _register_libero_tools(self, *, generic_tools: bool) -> None:
+    def _register_libero_tools(self) -> None:
+        generic_tools = self._generic_tools
         for definition in iter_tools(libero_tools):
             if generic_tools and definition.name == "back_project":
                 continue
@@ -315,6 +360,12 @@ class LiberoToolkit(Toolkit):
     def close(self) -> None:
         """Save the episode video on close."""
         super().close()
+        episode_search = getattr(self, "_episode_search", None)
+        if episode_search is not None:
+            episode_search.close()
+        knowledge_search = getattr(self, "_knowledge_search", None)
+        if knowledge_search is not None:
+            knowledge_search.close()
         try:
             frames = self._primitives.stop_recording()
             if frames:

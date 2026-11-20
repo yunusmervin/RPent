@@ -20,11 +20,13 @@ import fcntl
 import os
 import re
 import shutil
+import warnings
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 import yaml
 
+from rpent.memory.freeze_state import assert_corpus_writable
 from rpent.utils.config import get_repo_root
 from rpent.utils.logging import get_logger
 
@@ -126,7 +128,13 @@ def _has_local_memory(root: Path) -> bool:
     return root.is_dir() and any(path.is_file() for path in root.rglob("*"))
 
 
-class MemoryManager:
+class KnowledgeIndexer(Protocol):
+    """Optional derived index updated only after canonical leaves are published."""
+
+    def upsert_paths(self, paths: list[Path]) -> int: ...
+
+
+class FileSystemBackend:
     """Manage merge, validation, and synchronization for one memory corpus.
 
     root is the corpus root. It is stored resolved and created lazily by
@@ -139,10 +147,16 @@ class MemoryManager:
         *,
         memory_access: str = "read_only",
         inbox_cell_tag: str | None = None,
+        knowledge_indexer: KnowledgeIndexer | None = None,
     ) -> None:
         self._root = Path(root).resolve()
         self._memory_access = memory_access
         self._inbox_cell_tag = inbox_cell_tag
+        self._knowledge_indexer = knowledge_indexer
+
+    def set_knowledge_indexer(self, indexer: KnowledgeIndexer | None) -> None:
+        """Attach a lazy index writer without changing corpus permissions."""
+        self._knowledge_indexer = indexer
 
     @property
     def root(self) -> Path:
@@ -191,6 +205,8 @@ class MemoryManager:
             return resolved
 
         parts = resolved.relative_to(self._root).parts
+        if write:
+            assert_corpus_writable(self._root)
         if self._memory_access == "inbox_write" and parts[:3] == (
             "_internal",
             "inbox",
@@ -222,6 +238,7 @@ class MemoryManager:
         archived under _internal/conflicts. Solved audit/recipe pairs are
         copied to task-specific/. MEMORY.md is refreshed at the end.
         """
+        assert_corpus_writable(self._root)
         self.check_layout()
         root = self._root
         run_dir = Path(run_state_dir).resolve()
@@ -251,6 +268,7 @@ class MemoryManager:
         with lock_path.open("r+") as lock_file:
             fcntl.flock(lock_file, fcntl.LOCK_EX)
             published_draft = False
+            published_leaves: set[Path] = set()
             for source in sorted(inbox.glob("*.md")):
                 try:
                     metadata, body = _split_frontmatter(source)
@@ -264,6 +282,7 @@ class MemoryManager:
                 published_draft = True
                 if not destination.exists():
                     destination.write_text(_render(metadata, body))
+                    published_leaves.add(destination)
                     result[metadata["scope"]] += 1
                     continue
                 try:
@@ -285,6 +304,7 @@ class MemoryManager:
                     continue
                 merged_metadata = _merge_evidence(old_metadata, metadata)
                 destination.write_text(_render(merged_metadata, old_body))
+                published_leaves.add(destination)
                 result["evidence"] += 1
                 if body.strip() != old_body.strip():
                     conflict = conflicts / f"{memory_id}__from_{cell_tag}.md"
@@ -312,6 +332,21 @@ class MemoryManager:
                     )
 
             self.rebuild_index()
+            if (
+                published_leaves
+                and self._memory_access == "inbox_write"
+                and self._knowledge_indexer is not None
+            ):
+                # Keep the lock while reading the published revision so another
+                # merge cannot overwrite newer index metadata with an older view.
+                try:
+                    self._knowledge_indexer.upsert_paths(sorted(published_leaves))
+                except Exception as exc:
+                    logger.warning(
+                        "knowledge indexing failed; canonical merge is preserved: %s: %s",
+                        type(exc).__name__,
+                        exc,
+                    )
         return result
 
     def rebuild_index(self) -> Path | None:
@@ -321,6 +356,7 @@ class MemoryManager:
         index is rebuilt from the rest. Returns None and writes nothing when
         there are no leaves with parseable frontmatter.
         """
+        assert_corpus_writable(self._root)
         self.check_layout()
         root = self._root
         groups: dict[str, list[tuple[str, dict[str, Any]]]] = {
@@ -404,6 +440,7 @@ class MemoryManager:
         allow_patterns: tuple[str, ...] | None = None,
     ) -> Path:
         """Sync this memory corpus from its Hugging Face dataset."""
+        assert_corpus_writable(self._root, recursive=True)
         robot_name = self._root.name
         repo_id = os.environ.get(
             "RPENT_MEMORY_HF_REPO",
@@ -450,4 +487,15 @@ class MemoryManager:
         return self._root
 
 
-__all__ = ["MemoryManager"]
+def __getattr__(name: str) -> Any:
+    if name == "MemoryManager":
+        warnings.warn(
+            "MemoryManager is deprecated; use FileSystemBackend instead",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return FileSystemBackend
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+__all__ = ["FileSystemBackend"]

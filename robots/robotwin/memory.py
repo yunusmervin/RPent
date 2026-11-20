@@ -17,7 +17,7 @@
 import os
 from argparse import Namespace
 
-from rpent.memory import MemoryManager
+from rpent.memory import MemoryManager, get_memory_backend
 from rpent.memory.model import validate_options
 from rpent.memory.source import prepare_explicit_source
 from rpent.robots.robot_spec import RunConfig
@@ -35,9 +35,10 @@ def prepare_memory(args: Namespace, config: RunConfig) -> None:
     version = getattr(args, "memory_version", "auto")
     source = getattr(args, "memory_repo", None)
     if version == "auto" and source is None:
-        root = MemoryManager(get_memory_dir("robotwin")).sync(
-            remote_repo="RLinf/RPent-memory"
-        )
+        root = get_memory_backend(
+            root=get_memory_dir("robotwin"),
+            _backend_class=MemoryManager,
+        ).sync(remote_repo="RLinf/RPent-memory")
     else:
         source = source or os.environ.get("RPENT_MEMORY_HF_REPO", "RLinf/RPent-memory")
         root = prepare_explicit_source(

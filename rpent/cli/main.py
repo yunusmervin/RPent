@@ -42,7 +42,7 @@ import shlex
 import sys
 import time
 from collections.abc import Callable
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from pathlib import Path
 
 from rpent.cli.tui import (
@@ -53,8 +53,9 @@ from rpent.dashboard.events import (
     NullDashboardEventSink,
     RunStartedEvent,
 )
+from rpent.episode.hook import record_episode
 from rpent.evaluation import RunFinalizationContext
-from rpent.memory import MemoryManager
+from rpent.memory import MemoryBackend
 from rpent.planner.base import (
     REASONING_EFFORTS,
     build_planner,
@@ -63,6 +64,9 @@ from rpent.planner.base import (
 from rpent.planner.check import EXTERNALLY_CONFIGURED_PLANNERS
 from rpent.robots import enumerate_robots, get_robot_spec, get_toolkit
 from rpent.session.planner_capture import end_planner_task, start_planner_task
+from rpent.session_memory.hook import SessionMemoryHook
+from rpent.session_memory.recall import recall_preferences, register_preference_recall
+from rpent.session_memory.service import create_session_memory_client
 from rpent.utils.logging import get_logger, init_output_dir
 
 logger = get_logger("agent")
@@ -206,6 +210,17 @@ def _build_argparser() -> argparse.ArgumentParser:
         "Action recording is unavailable with --explore.",
     )
     ap.add_argument(
+        "--operator-id",
+        default="default_operator",
+        help="Operator scope for session history and preference recall.",
+    )
+    ap.add_argument(
+        "--session-memory-endpoint",
+        default=None,
+        help="HTTP endpoint of the independent mem0 session memory service. "
+        "Defaults to SESSION_MEMORY_ENDPOINT; unset disables this optional plane.",
+    )
+    ap.add_argument(
         "--memory-profile",
         choices=["hf", "local"],
         default=None,
@@ -215,6 +230,44 @@ def _build_argparser() -> argparse.ArgumentParser:
         "--memory-dir",
         default=None,
         help="Local memory root (environment default when omitted).",
+    )
+    ap.add_argument(
+        "--memory-backend",
+        choices=["filesystem", "agfs"],
+        default="filesystem",
+        help="Memory storage backend (default: filesystem).",
+    )
+    ap.add_argument(
+        "--agfs-endpoint",
+        default=None,
+        help="Attach to an existing AGFS server instead of starting one.",
+    )
+    ap.add_argument(
+        "--record-episodes",
+        action="store_true",
+        help="Record canonical episode JSON and key frames in AGFS. "
+        "Requires --explore, which enables recording automatically.",
+    )
+    ap.add_argument(
+        "--episode-store-endpoint",
+        default=None,
+        help="Reserved endpoint for a dedicated episode store.",
+    )
+    ap.add_argument(
+        "--milvus-uri",
+        default=None,
+        help="Milvus Standalone URI or local DB path. Defaults to "
+        "memory/<robot>/.milvus/episodes.db when episode memory is enabled.",
+    )
+    ap.add_argument(
+        "--enable-episode-search",
+        action="store_true",
+        help="Expose readonly semantic episode search when the selected index exists.",
+    )
+    ap.add_argument(
+        "--enable-knowledge-search",
+        action="store_true",
+        help="Expose readonly semantic knowledge search when the selected leaf index exists.",
     )
     ap.add_argument(
         "--memory-repo",
@@ -322,6 +375,7 @@ def _start_continuation_session(
     prompt_vars,
     session_number: int,
     session_max: int,
+    session_memory_hook: SessionMemoryHook | None = None,
 ):
     """Build a fresh planner and prompts for an exploration handoff."""
     logger.info("=== handing off to agent %d/%d ===", session_number, session_max)
@@ -339,6 +393,11 @@ def _start_continuation_session(
         dashboard_events=dashboard_events,
         no_images=args.no_images,
         interactive=args.tui,
+        user_input_hook=(
+            session_memory_hook.record_user_message
+            if session_memory_hook is not None and args.tui and args.planner == "api"
+            else None
+        ),
     )
     system_prompt = prompt_bundle.render(
         "system",
@@ -461,6 +520,12 @@ def main() -> int:
         parser.error("--memory-dir requires --memory-profile local or --explore")
     if args.memory_repo is not None and args.memory_profile == "local":
         parser.error("--memory-repo requires HF evaluation")
+    if args.agfs_endpoint is not None and args.memory_backend != "agfs":
+        parser.error("--agfs-endpoint requires --memory-backend agfs")
+    if args.record_episodes and not args.explore:
+        parser.error(
+            "--record-episodes requires --explore; evaluation memory is read-only"
+        )
     from rpent.memory.loading import prepare_run_memory
 
     try:
@@ -478,7 +543,15 @@ def main() -> int:
         return run_dashboard_session(args, robot_spec, parser=parser)
 
     try:
-        run_config = robot_spec.parse_config(args)
+        run_config = replace(
+            robot_spec.parse_config(args),
+            memory_backend=getattr(args, "memory_backend", "filesystem"),
+            agfs_endpoint=getattr(args, "agfs_endpoint", None),
+            record_episodes=getattr(args, "record_episodes", False),
+            episode_search_enabled=getattr(args, "enable_episode_search", False),
+            knowledge_search_enabled=getattr(args, "enable_knowledge_search", False),
+            milvus_uri=getattr(args, "milvus_uri", None),
+        )
     except (OSError, ValueError) as exc:
         parser.error(str(exc))
     recipe_tag = run_config.recipe_tag
@@ -493,6 +566,13 @@ def main() -> int:
     logger.info("physical agent cmd: %s", shlex.join([sys.executable, *sys.argv]))
 
     prepare_run_memory(args, robot_spec, run_config)
+
+    session_memory_client = create_session_memory_client(args.session_memory_endpoint)
+    session_memory_hook = SessionMemoryHook.from_args(
+        args, session_memory_client, run_id=recipe_tag
+    )
+    # A terminal interaction does not turn a benchmark run into exploration.
+    session_memory_hook.writable &= bool(args.explore)
 
     dashboard_events = NullDashboardEventSink()
 
@@ -511,9 +591,22 @@ def main() -> int:
         dashboard_events=dashboard_events,
         no_images=args.no_images,
         interactive=args.tui,
+        user_input_hook=(
+            session_memory_hook.record_user_message if native_cli else None
+        ),
     )
     prompt_bundle = robot_spec.prompts
-    prompt_vars = {**prompt_vars, "output_dir": output_dir}
+    operator_preferences = recall_preferences(
+        session_memory_client,
+        str(task_desc.get("task_language") or task_desc.get("task_name") or recipe_tag),
+        user_id=args.operator_id,
+        run_id=recipe_tag,
+    )
+    prompt_vars = {
+        **prompt_vars,
+        "output_dir": output_dir,
+        "operator_preferences": operator_preferences,
+    }
     system_prompt = prompt_bundle.render(
         "system",
         variables=prompt_vars,
@@ -547,6 +640,7 @@ def main() -> int:
             first_prompt_default=user_msg,
             extra_help=queued_help
             + (operator_input.help_text if operator_input else ""),
+            on_user_line=session_memory_hook.record_user_message,
             **(
                 {
                     "line_handler": operator_input.route_line,
@@ -587,6 +681,8 @@ def main() -> int:
             logger.info("no task entered; ending session before start.")
     if human_interactive_exploration:
         prompt_vars = {**prompt_vars, "initial_user_message": first_user_msg}
+    if not args.tui and first_user_msg is not None:
+        session_memory_hook.record_task(first_user_msg)
     # Exploration may hand off between independent planner contexts.
     sessions = max(1, int(getattr(args, "explore_sessions", 1) or 1))
     if not getattr(args, "explore", False):
@@ -595,7 +691,9 @@ def main() -> int:
     solved = False
     environment_success: bool | None = None
     environment_metrics: dict = {}
-    memory_manager: MemoryManager | None = None
+    memory_manager: MemoryBackend | None = None
+    episode_state_dir = Path(output_dir)
+    deferred_daemons = []
     try:
         if first_user_msg is not None:
             dashboard_events.emit(RunStartedEvent())
@@ -614,12 +712,14 @@ def main() -> int:
                     prompt_vars=prompt_vars,
                     session_number=session_number,
                     session_max=sessions,
+                    session_memory_hook=session_memory_hook,
                 )
             state_output_dir = output_dir
             if getattr(args, "explore", False):
                 state_output_dir = (
                     output_dir / "sessions" / f"session_{session_number:03d}"
                 )
+            episode_state_dir = Path(state_output_dir)
             if getattr(robot_spec, "supports_exploration", False):
                 toolkit = get_toolkit(
                     robot_name,
@@ -645,11 +745,18 @@ def main() -> int:
                     config=run_config,
                 )
             memory_manager = toolkit.memory
+            register_preference_recall(
+                toolkit,
+                session_memory_client,
+                user_id=args.operator_id,
+                run_id=recipe_tag,
+            )
             if operator_input is not None and input_queue is not None:
 
                 def accept_verdict(verdict: str, active_toolkit=toolkit) -> bool:
                     if not active_toolkit.request_direct_verdict(verdict):
                         return False
+                    session_memory_hook.record_verdict(verdict)
                     logger.info(
                         "/%s accepted: stopping actions, then recording the result and exiting.",
                         verdict,
@@ -752,83 +859,128 @@ def main() -> int:
             logger.info("recipe: %s", recipe_path)
         else:
             logger.info("recipe: not written (cell unsolved)")
-        for d in daemons:
-            d.stop()
-
-    elapsed = time.time() - t0
-
-    transcript_path = Path(output_dir) / f"transcript_{recipe_tag}.json"
-    record = {
-        **task_desc,
-        "model": args.model,
-        "elapsed_s": round(elapsed, 1),
-        "finish": finish_result,
-        "error": agent_error,
-        "environment_success": environment_success,
-        "stats": stats,
-        "messages": _serialize_messages(messages),
-    }
-    with open(transcript_path, "a") as f:
-        json.dump(record, f, indent=2, default=str)
-
-    logger.info("elapsed: %.1fs", elapsed)
-    logger.info(
-        "usage: in=%s out=%s tool_calls=%s",
-        stats.get("total_input_tokens", "?"),
-        stats.get("total_output_tokens", "?"),
-        stats.get("tool_calls", "?"),
-    )
-    logger.info("transcript: %s", transcript_path)
-
-    if robot_spec.finalize_run is not None:
         try:
-            result_path = robot_spec.finalize_run(
-                RunFinalizationContext(
-                    output_dir=Path(output_dir),
-                    robot_name=robot_name,
-                    task_desc=dict(task_desc),
-                    environment_success=environment_success,
-                    environment_metrics=environment_metrics,
-                    agent_error=agent_error,
-                    elapsed_s=elapsed,
-                    planner=args.planner,
-                    model=args.model,
-                    reasoning_effort=args.reasoning_effort,
-                    max_turns=args.max_turns,
-                    planner_timeout_s=args.planner_timeout_s,
-                    finish_result=(
-                        dict(finish_result) if finish_result is not None else None
-                    ),
-                    stats=dict(stats),
+            for d in daemons:
+                # Publication still needs embedding. An unhandled BaseException
+                # skips finalization, so stop immediately on that path.
+                if (
+                    sys.exc_info()[0] is None
+                    and getattr(d, "name", None) == "embedding_server"
+                    and runtime_kwargs.get("embedding_client") is not None
+                ):
+                    deferred_daemons.append(d)
+                else:
+                    d.stop()
+        except BaseException:
+            for daemon in deferred_daemons:
+                daemon.stop()
+            raise
+
+    try:
+        elapsed = time.time() - t0
+
+        transcript_path = Path(output_dir) / f"transcript_{recipe_tag}.json"
+        record = {
+            **task_desc,
+            "model": args.model,
+            "elapsed_s": round(elapsed, 1),
+            "finish": finish_result,
+            "error": agent_error,
+            "environment_success": environment_success,
+            "stats": stats,
+            "messages": _serialize_messages(messages),
+        }
+        with open(transcript_path, "a") as f:
+            json.dump(record, f, indent=2, default=str)
+
+        logger.info("elapsed: %.1fs", elapsed)
+        logger.info(
+            "usage: in=%s out=%s tool_calls=%s",
+            stats.get("total_input_tokens", "?"),
+            stats.get("total_output_tokens", "?"),
+            stats.get("tool_calls", "?"),
+        )
+        logger.info("transcript: %s", transcript_path)
+
+        if robot_spec.finalize_run is not None:
+            try:
+                result_path = robot_spec.finalize_run(
+                    RunFinalizationContext(
+                        output_dir=Path(output_dir),
+                        robot_name=robot_name,
+                        task_desc=dict(task_desc),
+                        environment_success=environment_success,
+                        environment_metrics=environment_metrics,
+                        agent_error=agent_error,
+                        elapsed_s=elapsed,
+                        planner=args.planner,
+                        model=args.model,
+                        reasoning_effort=args.reasoning_effort,
+                        max_turns=args.max_turns,
+                        planner_timeout_s=args.planner_timeout_s,
+                        finish_result=(
+                            dict(finish_result) if finish_result is not None else None
+                        ),
+                        stats=dict(stats),
+                    )
                 )
-            )
-            if result_path:
-                logger.info("run result: %s", result_path)
-        except Exception as exc:
-            agent_error = f"result finalization failed: {type(exc).__name__}: {exc}"
-            logger.error("%s", agent_error)
+                if result_path:
+                    logger.info("run result: %s", result_path)
+            except Exception as exc:
+                agent_error = f"result finalization failed: {type(exc).__name__}: {exc}"
+                logger.error("%s", agent_error)
 
-    # Publish exploration artifacts into the corpus after the session loop.
-    if (
-        getattr(args, "explore", False)
-        and getattr(args, "auto_merge_memory", False)
-        and not agent_error
-        and not (finish_result or {}).get("operator_aborted")
-        and memory_manager is not None
-    ):
-        try:
-            merge_result = memory_manager.merge_memory(
+        # Publish exploration artifacts into the corpus after the session loop.
+        merge_required = (
+            getattr(args, "explore", False)
+            and getattr(args, "auto_merge_memory", False)
+            and not agent_error
+            and not (finish_result or {}).get("operator_aborted")
+            and memory_manager is not None
+        )
+        merge_succeeded = False
+        if merge_required:
+            try:
+                merge_result = memory_manager.merge_memory(
+                    cell_tag=run_config.recipe_tag,
+                    run_state_dir=run_config.output_dir,
+                    solved=solved,
+                )
+                merge_succeeded = True
+                if merge_result:
+                    logger.info("memory merged: %s", merge_result)
+            except Exception as exc:
+                agent_error = f"memory finalization failed: {type(exc).__name__}: {exc}"
+                logger.error("%s", agent_error)
+
+        episodes_enabled = getattr(args, "explore", False) or getattr(
+            args, "record_episodes", False
+        )
+        if (
+            episodes_enabled
+            and memory_manager is not None
+            and (merge_succeeded or not merge_required)
+        ):
+            record_episode(
+                memory_manager,
+                run_state_dir=episode_state_dir,
                 cell_tag=run_config.recipe_tag,
-                run_state_dir=run_config.output_dir,
-                solved=solved,
+                robot=robot_name,
+                task_desc=task_desc,
+                finish_result=finish_result,
+                stats=stats,
+                elapsed_s=elapsed,
+                memory_version=prompt_vars.get("memory_version"),
+                environment_success=environment_success,
+                allow_read_only_write=getattr(args, "record_episodes", False),
+                embedding_client=runtime_kwargs.get("embedding_client"),
+                milvus_uri=getattr(args, "milvus_uri", None),
             )
-            if merge_result:
-                logger.info("memory merged: %s", merge_result)
-        except Exception as exc:
-            agent_error = f"memory finalization failed: {type(exc).__name__}: {exc}"
-            logger.error("%s", agent_error)
 
-    return 1 if agent_error else 0
+        return 1 if agent_error else 0
+    finally:
+        for daemon in deferred_daemons:
+            daemon.stop()
 
 
 if __name__ == "__main__":

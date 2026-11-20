@@ -1622,3 +1622,70 @@ def test_interrupted_tool_arguments_are_retained_without_execution(tmp_path):
     assert call.arguments.data == '{ "position":'
     assert call.arguments.completeness == "partial"
     assert call.status == "not_executed" and toolkit.calls == []
+
+
+@pytest.mark.parametrize("memory_profile", ["local", "hf"])
+def test_session_memory_hook_preserves_sdk_capture(
+    tmp_path, monkeypatch, memory_profile
+):
+    from rpent.planner import base
+    from rpent.session_memory.hook import SessionMemoryHook
+
+    writes = []
+    hook = SessionMemoryHook.from_args(
+        SimpleNamespace(
+            explore=True,
+            tui=True,
+            dashboard=False,
+            memory_profile=memory_profile,
+            operator_id="alice",
+        ),
+        SimpleNamespace(add=lambda **kwargs: writes.append(kwargs)),
+        run_id="cell-a",
+    )
+    events = Events()
+    toolkit = capturing_toolkit(tmp_path, events)
+    monkeypatch.setattr(
+        base,
+        "build_api_model",
+        lambda *args: TestModel(call_tools=[], custom_output_args=FINISH_ARGS),
+    )
+    planner = base.build_planner(
+        "api",
+        output_dir=tmp_path,
+        recipe_tag="cell-a",
+        robot_name="libero",
+        dashboard_events=events,
+        user_input_hook=hook.record_user_message,
+    )
+    try:
+        result = planner.solve(
+            system_prompt="Finish the task.",
+            user_message="Do the task.",
+            toolkit=toolkit,
+            max_turns=2,
+        )
+        assert result.error is None
+        assert result.stop_reason == "finish"
+        assert [m for m in result.messages if m["role"] == "user"] == [
+            {"role": "user", "content": "Do the task."}
+        ]
+        (record,) = toolkit.state.planner_records()
+        assert record.status == "completed"
+        (call,) = record.tool_calls
+        assert call.name == "finish" and call.status == "completed"
+        assert call.raw_result is not None and call.feedback is not None
+        assert writes == (
+            [
+                {
+                    "content": "Do the task.",
+                    "event": "task",
+                    "user_id": "alice",
+                    "run_id": "cell-a",
+                }
+            ]
+            if memory_profile == "local"
+            else []
+        )
+    finally:
+        toolkit.close()
